@@ -554,11 +554,11 @@ export default function QueryWorkspace() {
           label="ENV"
           value={environment}
           options={[
-            { value: "development", label: "Development" },
-            { value: "staging", label: "Staging" },
-            { value: "production", label: "Production" },
+            { value: "development" as Environment, label: "Development" },
+            { value: "staging"     as Environment, label: "Staging" },
+            { value: "production"  as Environment, label: "Production" },
           ]}
-          onChange={setEnvironment}
+          onChange={(v) => setEnvironment(v as Environment)}
         />
         <Selector
           label="SCH"
