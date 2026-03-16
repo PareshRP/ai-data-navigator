@@ -14,7 +14,125 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      connection_schemas: {
+        Row: {
+          columns: Json
+          connection_id: string
+          fetched_at: string
+          id: string
+          schema_name: string
+          table_name: string
+        }
+        Insert: {
+          columns?: Json
+          connection_id: string
+          fetched_at?: string
+          id?: string
+          schema_name: string
+          table_name: string
+        }
+        Update: {
+          columns?: Json
+          connection_id?: string
+          fetched_at?: string
+          id?: string
+          schema_name?: string
+          table_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "connection_schemas_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "database_connections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      database_connections: {
+        Row: {
+          created_at: string
+          database_name: string
+          environment: string
+          error_message: string | null
+          host: string
+          id: string
+          last_tested_at: string | null
+          name: string
+          password_enc: string | null
+          port: number
+          ssl_enabled: boolean
+          status: string
+          type: string
+          updated_at: string
+          user_id: string
+          username: string
+        }
+        Insert: {
+          created_at?: string
+          database_name: string
+          environment?: string
+          error_message?: string | null
+          host: string
+          id?: string
+          last_tested_at?: string | null
+          name: string
+          password_enc?: string | null
+          port: number
+          ssl_enabled?: boolean
+          status?: string
+          type: string
+          updated_at?: string
+          user_id: string
+          username: string
+        }
+        Update: {
+          created_at?: string
+          database_name?: string
+          environment?: string
+          error_message?: string | null
+          host?: string
+          id?: string
+          last_tested_at?: string | null
+          name?: string
+          password_enc?: string | null
+          port?: number
+          ssl_enabled?: boolean
+          status?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+          username?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          email: string | null
+          full_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
