@@ -348,12 +348,50 @@ LIMIT 50;`;
 
 export default function QueryWorkspace() {
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const { connections, loading: connLoading, fetchSchema } = useConnections();
+
+  // Selected connection
+  const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
+  const [liveSchemas, setLiveSchemas] = useState<SchemaTree | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+
+  // Derive active connection
+  const activeConn = connections.find((c) => c.id === selectedConnId) ?? null;
+
+  // Auto-select first connection
+  useEffect(() => {
+    if (!selectedConnId && connections.length > 0) {
+      setSelectedConnId(connections[0].id);
+    }
+  }, [connections, selectedConnId]);
+
+  // Load schema when connection changes
+  useEffect(() => {
+    if (!selectedConnId) { setLiveSchemas(null); return; }
+    setSchemaLoading(true);
+    fetchSchema(selectedConnId)
+      .then((schemas) => setLiveSchemas(schemas))
+      .catch(() => setLiveSchemas(null))
+      .finally(() => setSchemaLoading(false));
+  }, [selectedConnId, fetchSchema]);
+
+  // Effective schemas: live or fallback to mock
+  const effectiveSchemas: Record<DbType, Record<string, Record<string, { columns: { name: string; type: string }[] }>>> =
+    liveSchemas
+      ? ({ [(activeConn?.type ?? "postgresql")]: liveSchemas } as unknown as typeof effectiveSchemas)
+      : MOCK_SCHEMAS;
 
   // DB Controls
   const [dbType, setDbType] = useState<DbType>("postgresql");
   const [environment, setEnvironment] = useState<Environment>("development");
   const [schema, setSchema] = useState("public");
   const [table, setTable] = useState("users");
+
+  // Sync dbType with active connection
+  useEffect(() => {
+    if (activeConn) setDbType(activeConn.type as DbType);
+  }, [activeConn]);
 
   // Query
   const [query, setQuery] = useState(DEFAULT_QUERY);
