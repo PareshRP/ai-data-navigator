@@ -80,7 +80,7 @@ export default function SettingsPage() {
       {showAddDialog && (
         <AddConnectionDialog
           onClose={() => setShowAddDialog(false)}
-          onAdd={addConnection}
+          onAdd={async (conn) => { await addConnection(conn); }}
         />
       )}
 
