@@ -174,16 +174,17 @@ function Selector<T extends string>({
 
 function SchemaSidebar({
   dbType, schema, table,
-  onSchemaChange, onTableChange,
+  onSchemaChange, onTableChange, liveSchemas,
 }: {
   dbType: DbType;
   schema: string;
   table: string;
   onSchemaChange: (s: string) => void;
   onTableChange: (t: string) => void;
+  liveSchemas?: Record<string, Record<string, { columns: { name: string; type: string }[] }>>;
 }) {
   const [expandedSchemas, setExpandedSchemas] = useState<string[]>(["public", "app"]);
-  const schemas = MOCK_SCHEMAS[dbType];
+  const schemas = liveSchemas ?? MOCK_SCHEMAS[dbType];
 
   return (
     <div className="w-[220px] flex-shrink-0 flex flex-col border-r border-border bg-sidebar overflow-hidden">
