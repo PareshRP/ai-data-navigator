@@ -3,10 +3,12 @@ import {
   Play, Wand2, Lightbulb, Zap, BarChart3, ChevronDown,
   Database, Table2, Copy, Download, RefreshCw, X, ChevronRight,
   ChevronUp, Check, AlertCircle, Loader2, FileJson, FileText,
-  Sparkles,
+  Sparkles, Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useConnections, SchemaTree } from "@/hooks/useConnections";
+import { useNavigate } from "react-router-dom";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 type DbType = "postgresql" | "mongodb";
