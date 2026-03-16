@@ -3,10 +3,12 @@ import {
   Play, Wand2, Lightbulb, Zap, BarChart3, ChevronDown,
   Database, Table2, Copy, Download, RefreshCw, X, ChevronRight,
   ChevronUp, Check, AlertCircle, Loader2, FileJson, FileText,
-  Sparkles,
+  Sparkles, Plus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { useConnections, SchemaTree } from "@/hooks/useConnections";
+import { useNavigate } from "react-router-dom";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 type DbType = "postgresql" | "mongodb";
@@ -172,16 +174,17 @@ function Selector<T extends string>({
 
 function SchemaSidebar({
   dbType, schema, table,
-  onSchemaChange, onTableChange,
+  onSchemaChange, onTableChange, liveSchemas,
 }: {
   dbType: DbType;
   schema: string;
   table: string;
   onSchemaChange: (s: string) => void;
   onTableChange: (t: string) => void;
+  liveSchemas?: Record<string, Record<string, { columns: { name: string; type: string }[] }>>;
 }) {
   const [expandedSchemas, setExpandedSchemas] = useState<string[]>(["public", "app"]);
-  const schemas = MOCK_SCHEMAS[dbType];
+  const schemas = liveSchemas ?? MOCK_SCHEMAS[dbType];
 
   return (
     <div className="w-[220px] flex-shrink-0 flex flex-col border-r border-border bg-sidebar overflow-hidden">
@@ -346,12 +349,50 @@ LIMIT 50;`;
 
 export default function QueryWorkspace() {
   const { toast } = useToast();
+  const navigate = useNavigate();
+  const { connections, loading: connLoading, fetchSchema } = useConnections();
+
+  // Selected connection
+  const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
+  const [liveSchemas, setLiveSchemas] = useState<SchemaTree | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+
+  // Derive active connection
+  const activeConn = connections.find((c) => c.id === selectedConnId) ?? null;
+
+  // Auto-select first connection
+  useEffect(() => {
+    if (!selectedConnId && connections.length > 0) {
+      setSelectedConnId(connections[0].id);
+    }
+  }, [connections, selectedConnId]);
+
+  // Load schema when connection changes
+  useEffect(() => {
+    if (!selectedConnId) { setLiveSchemas(null); return; }
+    setSchemaLoading(true);
+    fetchSchema(selectedConnId)
+      .then((schemas) => setLiveSchemas(schemas))
+      .catch(() => setLiveSchemas(null))
+      .finally(() => setSchemaLoading(false));
+  }, [selectedConnId, fetchSchema]);
+
+  // Effective schemas: live or fallback to mock
+  const effectiveSchemas: Record<DbType, Record<string, Record<string, { columns: { name: string; type: string }[] }>>> =
+    liveSchemas
+      ? ({ [(activeConn?.type ?? "postgresql")]: liveSchemas } as unknown as typeof effectiveSchemas)
+      : MOCK_SCHEMAS;
 
   // DB Controls
   const [dbType, setDbType] = useState<DbType>("postgresql");
   const [environment, setEnvironment] = useState<Environment>("development");
   const [schema, setSchema] = useState("public");
   const [table, setTable] = useState("users");
+
+  // Sync dbType with active connection
+  useEffect(() => {
+    if (activeConn) setDbType(activeConn.type as DbType);
+  }, [activeConn]);
 
   // Query
   const [query, setQuery] = useState(DEFAULT_QUERY);
@@ -541,37 +582,56 @@ export default function QueryWorkspace() {
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface flex-shrink-0 flex-wrap">
-        <Selector
-          label="DB"
-          value={dbType}
-          options={[
-            { value: "postgresql", label: "PostgreSQL" },
-            { value: "mongodb", label: "MongoDB" },
-          ]}
-          onChange={(v) => { setDbType(v); setSchema(Object.keys(MOCK_SCHEMAS[v])[0]); setTable(Object.keys(Object.values(MOCK_SCHEMAS[v])[0])[0]); }}
-        />
-        <Selector
-          label="ENV"
-          value={environment}
-          options={[
-            { value: "development" as Environment, label: "Development" },
-            { value: "staging"     as Environment, label: "Staging" },
-            { value: "production"  as Environment, label: "Production" },
-          ]}
-          onChange={(v) => setEnvironment(v as Environment)}
-        />
+        {/* Connection selector */}
+        {connLoading ? (
+          <div className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
+            <Loader2 size={10} className="animate-spin" />
+            Loading…
+          </div>
+        ) : connections.length === 0 ? (
+          <button
+            onClick={() => navigate("/settings")}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-[11.5px] font-mono border border-dashed border-border text-muted-foreground hover:text-foreground hover:border-surface-border transition-snap"
+          >
+            <Plus size={11} />
+            Add Connection
+          </button>
+        ) : (
+          <Selector
+            label="CONN"
+            value={selectedConnId ?? ""}
+            options={connections.map((c) => ({ value: c.id, label: c.name }))}
+            onChange={(v) => setSelectedConnId(v)}
+          />
+        )}
+
+        {activeConn && (
+          <>
+            <span className="text-[10px] font-mono text-muted-foreground border border-border px-1.5 py-0.5 rounded-sm">
+              {activeConn.environment}
+            </span>
+            <span className={cn("ai-badge", activeConn.type === "postgresql" ? "ai-badge-cyan" : "ai-badge-pink")}>
+              {activeConn.type === "postgresql" ? "PostgreSQL" : "MongoDB"}
+            </span>
+          </>
+        )}
+
         <Selector
           label="SCH"
           value={schema}
-          options={Object.keys(MOCK_SCHEMAS[dbType]).map((s) => ({ value: s, label: s }))}
+          options={Object.keys(liveSchemas ?? MOCK_SCHEMAS[dbType]).map((s) => ({ value: s, label: s }))}
           onChange={setSchema}
         />
         <Selector
           label="TBL"
           value={table}
-          options={Object.keys(MOCK_SCHEMAS[dbType][schema] ?? {}).map((t) => ({ value: t, label: t }))}
+          options={Object.keys((liveSchemas ?? MOCK_SCHEMAS[dbType])[schema] ?? {}).map((t) => ({ value: t, label: t }))}
           onChange={setTable}
         />
+
+        {schemaLoading && (
+          <Loader2 size={11} className="animate-spin text-muted-foreground" />
+        )}
 
         <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
           {queryTime !== null && (
@@ -589,6 +649,7 @@ export default function QueryWorkspace() {
           table={table}
           onSchemaChange={setSchema}
           onTableChange={setTable}
+          liveSchemas={liveSchemas ?? undefined}
         />
 
         {/* Main area */}

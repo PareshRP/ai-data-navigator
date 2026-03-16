@@ -9,9 +9,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
-  Circle,
+  LogOut,
+  User,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 const NAV_ITEMS = [
   { to: "/",         icon: Database,     label: "Query Workspace", short: "QW" },
@@ -23,7 +26,23 @@ const NAV_ITEMS = [
 
 export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const location = useLocation();
+  const { user, signOut } = useAuth();
+
+  const displayName =
+    user?.user_metadata?.full_name ??
+    user?.user_metadata?.name ??
+    user?.email?.split("@")[0] ??
+    "User";
+
+  const avatarUrl = user?.user_metadata?.avatar_url as string | undefined;
+  const initials = displayName
+    .split(" ")
+    .map((n: string) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
@@ -83,18 +102,67 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {/* Bottom: connection status + collapse toggle */}
+        {/* Bottom: user + collapse */}
         <div className="border-t border-sidebar-border">
+          {/* User profile */}
           {!collapsed && (
-            <div className="px-3 py-2">
-              <div className="flex items-center gap-1.5">
-                <Circle size={6} className="text-success fill-success" />
-                <span className="text-[11px] text-muted-foreground font-mono truncate">
-                  No connection
-                </span>
-              </div>
+            <div className="relative">
+              <button
+                onClick={() => setUserMenuOpen((o) => !o)}
+                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-sidebar-accent transition-snap group"
+              >
+                {avatarUrl ? (
+                  <img
+                    src={avatarUrl}
+                    alt={displayName}
+                    className="w-6 h-6 rounded-full flex-shrink-0 object-cover"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-primary-dim border border-primary/30 flex items-center justify-center flex-shrink-0">
+                    <span className="text-[9px] font-bold text-primary">{initials}</span>
+                  </div>
+                )}
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-[11.5px] font-medium text-foreground truncate leading-none">
+                    {displayName}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground font-mono truncate mt-0.5">
+                    {user?.email}
+                  </p>
+                </div>
+                <ChevronDown size={11} className={cn("text-muted-foreground transition-transform flex-shrink-0", userMenuOpen && "rotate-180")} />
+              </button>
+
+              {/* User dropdown */}
+              {userMenuOpen && (
+                <div className="absolute bottom-full mb-1 left-2 right-2 panel-raised shadow-panel z-50 animate-fade-in">
+                  <div className="p-2 border-b border-border">
+                    <p className="text-[11px] font-semibold text-foreground truncate">{displayName}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono truncate">{user?.email}</p>
+                  </div>
+                  <button
+                    onClick={() => { setUserMenuOpen(false); signOut(); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-[12px] text-destructive hover:bg-destructive/10 transition-snap rounded-sm"
+                  >
+                    <LogOut size={12} />
+                    Sign Out
+                  </button>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Collapsed user avatar */}
+          {collapsed && (
+            <button
+              onClick={() => signOut()}
+              title="Sign Out"
+              className="w-full flex items-center justify-center py-2.5 hover:bg-sidebar-accent transition-snap text-muted-foreground hover:text-destructive border-b border-sidebar-border"
+            >
+              <LogOut size={13} />
+            </button>
+          )}
+
           <button
             onClick={() => setCollapsed((c) => !c)}
             className={cn(
@@ -103,11 +171,7 @@ export default function AppLayout() {
               "border-t border-sidebar-border"
             )}
           >
-            {collapsed ? (
-              <ChevronRight size={13} />
-            ) : (
-              <ChevronLeft size={13} />
-            )}
+            {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
           </button>
         </div>
       </aside>
