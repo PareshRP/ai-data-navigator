@@ -1,44 +1,13 @@
 import { useState } from "react";
 import {
   Settings, Database, Cpu, Shield, Activity,
-  Plus, Trash2, Check, Eye, EyeOff, AlertCircle,
-  ChevronRight, Zap, Globe,
+  Plus, Trash2, Check, AlertCircle,
+  ChevronRight, Zap, Globe, Loader2, RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface Connection {
-  id: string;
-  name: string;
-  type: "postgresql" | "mongodb";
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  environment: string;
-  status: "connected" | "disconnected" | "error";
-  latencyMs?: number;
-}
-
-const MOCK_CONNECTIONS: Connection[] = [
-  {
-    id: "c1", name: "Production PG", type: "postgresql",
-    host: "db.prod.example.com", port: 5432, database: "app_prod",
-    username: "readonly_user", environment: "production",
-    status: "connected", latencyMs: 12,
-  },
-  {
-    id: "c2", name: "Dev PostgreSQL", type: "postgresql",
-    host: "localhost", port: 5432, database: "app_dev",
-    username: "postgres", environment: "development",
-    status: "disconnected",
-  },
-  {
-    id: "c3", name: "MongoDB Atlas", type: "mongodb",
-    host: "cluster0.example.mongodb.net", port: 27017, database: "app",
-    username: "readonly", environment: "staging",
-    status: "error", latencyMs: undefined,
-  },
-];
+import { useConnections } from "@/hooks/useConnections";
+import AddConnectionDialog from "@/components/AddConnectionDialog";
+import { useToast } from "@/hooks/use-toast";
 
 type Tab = "connections" | "ai" | "security" | "usage";
 
@@ -65,18 +34,39 @@ const USAGE_DATA = [
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("connections");
   const [selectedModel, setSelectedModel] = useState(AI_MODELS[0].id);
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
-  const [connections, setConnections] = useState(MOCK_CONNECTIONS);
   const [rateLimitPerMinute, setRateLimitPerMinute] = useState(20);
   const [maxQueryRows, setMaxQueryRows] = useState(500);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
-  const togglePassword = (id: string) =>
-    setShowPasswords((p) => ({ ...p, [id]: !p[id] }));
+  const { connections, loading, error, addConnection, deleteConnection, testConnection } = useConnections();
+  const { toast } = useToast();
 
-  const removeConnection = (id: string) =>
-    setConnections((c) => c.filter((x) => x.id !== id));
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteConnection(id);
+      toast({ title: "Connection removed" });
+    } catch (e) {
+      toast({ title: "Error", description: e instanceof Error ? e.message : "Failed", variant: "destructive" });
+    }
+  };
 
-  const statusColor: Record<Connection["status"], string> = {
+  const handleTest = async (id: string) => {
+    setTestingId(id);
+    try {
+      const status = await testConnection(id);
+      toast({
+        title: status === "connected" ? "Connection successful" : "Connection failed",
+        variant: status === "connected" ? "default" : "destructive",
+      });
+    } catch (e) {
+      toast({ title: "Test failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const statusColor: Record<string, string> = {
     connected:    "text-success",
     disconnected: "text-muted-foreground",
     error:        "text-destructive",
@@ -87,6 +77,13 @@ export default function SettingsPage() {
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
+      {showAddDialog && (
+        <AddConnectionDialog
+          onClose={() => setShowAddDialog(false)}
+          onAdd={addConnection}
+        />
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface flex-shrink-0">
         <Settings size={15} className="text-primary" />
@@ -130,19 +127,60 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-[13px] font-semibold text-foreground">Database Connections</h2>
-                  <p className="text-[11.5px] text-muted-foreground mt-0.5">Manage your read-only database connections.</p>
+                  <p className="text-[11.5px] text-muted-foreground mt-0.5">
+                    Your connections are isolated and encrypted. Other users cannot see them.
+                  </p>
                 </div>
-                <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-[11.5px] bg-primary text-primary-foreground hover:opacity-90 transition-snap">
+                <button
+                  onClick={() => setShowAddDialog(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-[11.5px] bg-primary text-primary-foreground hover:opacity-90 transition-snap"
+                >
                   <Plus size={11} /> Add Connection
                 </button>
               </div>
 
+              {/* Loading */}
+              {loading && (
+                <div className="flex items-center gap-2 text-muted-foreground text-[12px] font-mono py-4">
+                  <Loader2 size={13} className="animate-spin" />
+                  Loading connections…
+                </div>
+              )}
+
+              {/* Error */}
+              {error && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-destructive/10 border border-destructive/20 text-destructive text-[12px] font-mono">
+                  <AlertCircle size={11} />
+                  {error}
+                </div>
+              )}
+
+              {/* Empty state */}
+              {!loading && !error && connections.length === 0 && (
+                <div className="panel p-8 flex flex-col items-center gap-3 text-center">
+                  <div className="w-12 h-12 rounded-sm bg-primary-dim border border-primary/20 flex items-center justify-center">
+                    <Database size={20} className="text-primary opacity-60" />
+                  </div>
+                  <p className="text-[13px] font-semibold text-foreground">No connections yet</p>
+                  <p className="text-[11.5px] text-muted-foreground max-w-xs leading-relaxed">
+                    Add your first database connection to start running queries. Credentials are encrypted and only visible to you.
+                  </p>
+                  <button
+                    onClick={() => setShowAddDialog(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[12px] bg-primary text-primary-foreground hover:opacity-90 transition-snap mt-1"
+                  >
+                    <Plus size={11} /> Add Connection
+                  </button>
+                </div>
+              )}
+
+              {/* Connection list */}
               <div className="space-y-2">
                 {connections.map((conn) => (
                   <div key={conn.id} className="panel p-4">
                     <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <div className={cn("w-2 h-2 rounded-full", {
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className={cn("w-2 h-2 rounded-full flex-shrink-0", {
                           "bg-success": conn.status === "connected",
                           "bg-muted-foreground": conn.status === "disconnected",
                           "bg-destructive": conn.status === "error",
@@ -155,15 +193,22 @@ export default function SettingsPage() {
                           {conn.environment}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {conn.latencyMs && (
-                          <span className="text-[11px] font-mono text-success">{conn.latencyMs}ms</span>
-                        )}
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         <span className={cn("text-[11px] font-mono capitalize", statusColor[conn.status])}>
                           {conn.status}
                         </span>
                         <button
-                          onClick={() => removeConnection(conn.id)}
+                          onClick={() => handleTest(conn.id)}
+                          disabled={testingId === conn.id}
+                          title="Test connection"
+                          className="p-1 rounded-sm text-muted-foreground hover:text-primary hover:bg-primary/10 transition-snap disabled:opacity-50"
+                        >
+                          {testingId === conn.id
+                            ? <Loader2 size={11} className="animate-spin" />
+                            : <RefreshCw size={11} />}
+                        </button>
+                        <button
+                          onClick={() => handleDelete(conn.id)}
                           className="p-1 rounded-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-snap"
                         >
                           <Trash2 size={11} />
@@ -175,35 +220,22 @@ export default function SettingsPage() {
                       {[
                         { label: "Host", value: conn.host },
                         { label: "Port", value: String(conn.port) },
-                        { label: "Database", value: conn.database },
+                        { label: "Database", value: conn.database_name },
                         { label: "Username", value: conn.username },
                         { label: "Password", value: "••••••••" },
+                        { label: "SSL", value: conn.ssl_enabled ? "Enabled" : "Disabled" },
                       ].map(({ label, value }) => (
                         <div key={label}>
                           <p className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">{label}</p>
-                          <div className="flex items-center gap-1">
-                            <span className="text-foreground">
-                              {label === "Password"
-                                ? (showPasswords[conn.id] ? "super_secret_pw" : "••••••••")
-                                : value}
-                            </span>
-                            {label === "Password" && (
-                              <button
-                                onClick={() => togglePassword(conn.id)}
-                                className="text-muted-foreground hover:text-foreground"
-                              >
-                                {showPasswords[conn.id] ? <EyeOff size={9} /> : <Eye size={9} />}
-                              </button>
-                            )}
-                          </div>
+                          <span className="text-foreground">{value}</span>
                         </div>
                       ))}
                     </div>
 
-                    {conn.status === "error" && (
+                    {conn.status === "error" && conn.error_message && (
                       <div className="mt-3 flex items-center gap-2 text-[11px] text-destructive font-mono bg-destructive/10 border border-destructive/20 rounded-sm px-2.5 py-1.5">
                         <AlertCircle size={10} />
-                        Connection failed. Check host and credentials.
+                        {conn.error_message}
                       </div>
                     )}
                   </div>
@@ -259,25 +291,21 @@ export default function SettingsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-[11px] text-muted-foreground uppercase tracking-wider block mb-1.5">Max Result Rows</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        value={maxQueryRows}
-                        onChange={(e) => setMaxQueryRows(Number(e.target.value))}
-                        className="code-editor w-full px-2.5 py-1.5 rounded-sm text-[12px]"
-                      />
-                    </div>
+                    <input
+                      type="number"
+                      value={maxQueryRows}
+                      onChange={(e) => setMaxQueryRows(Number(e.target.value))}
+                      className="code-editor w-full px-2.5 py-1.5 rounded-sm text-[12px]"
+                    />
                   </div>
                   <div>
                     <label className="text-[11px] text-muted-foreground uppercase tracking-wider block mb-1.5">AI Rate Limit (req/min)</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number"
-                        value={rateLimitPerMinute}
-                        onChange={(e) => setRateLimitPerMinute(Number(e.target.value))}
-                        className="code-editor w-full px-2.5 py-1.5 rounded-sm text-[12px]"
-                      />
-                    </div>
+                    <input
+                      type="number"
+                      value={rateLimitPerMinute}
+                      onChange={(e) => setRateLimitPerMinute(Number(e.target.value))}
+                      className="code-editor w-full px-2.5 py-1.5 rounded-sm text-[12px]"
+                    />
                   </div>
                 </div>
               </div>
@@ -317,13 +345,36 @@ export default function SettingsPage() {
               <div className="panel p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <Globe size={13} className="text-primary" />
+                  <p className="text-[12px] font-semibold text-foreground">Credential Security</p>
+                </div>
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    { label: "Password Encryption",    value: "AES XOR + Base64", status: "Active" },
+                    { label: "RLS User Isolation",      value: "Per-user rows",    status: "Active" },
+                    { label: "Credentials Exposure",    value: "Never returned",   status: "Protected" },
+                    { label: "SSO Authentication",      value: "Google OAuth2",    status: "Active" },
+                  ].map(({ label, value, status }) => (
+                    <div key={label} className="flex items-center justify-between bg-background rounded-sm border border-border px-3 py-2">
+                      <div>
+                        <p className="text-[11px] text-muted-foreground">{label}</p>
+                        <p className="text-[12px] font-mono text-foreground">{value}</p>
+                      </div>
+                      <span className="ai-badge ai-badge-success">{status}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="panel p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Globe size={13} className="text-primary" />
                   <p className="text-[12px] font-semibold text-foreground">Rate Limiting</p>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
                   {[
-                    { label: "AI Endpoints", value: `${rateLimitPerMinute}/min`, status: "Active" },
-                    { label: "Query Execution", value: "100/min", status: "Active" },
-                    { label: "Schema Fetch", value: "50/min", status: "Active" },
+                    { label: "AI Endpoints",    value: `${rateLimitPerMinute}/min`, status: "Active" },
+                    { label: "Query Execution", value: "100/min",                   status: "Active" },
+                    { label: "Schema Fetch",    value: "50/min",                    status: "Active" },
                   ].map(({ label, value, status }) => (
                     <div key={label} className="bg-background rounded-sm border border-border p-2.5">
                       <p className="text-[10.5px] text-muted-foreground">{label}</p>
@@ -356,21 +407,19 @@ export default function SettingsPage() {
                 <p className="text-[11.5px] text-muted-foreground mt-0.5">Last 7 days of AI API consumption.</p>
               </div>
 
-              {/* Summary */}
               <div className="grid grid-cols-3 gap-3">
                 {[
-                  { label: "Total Prompts",   value: totalPrompts, unit: "" },
-                  { label: "Tokens Used",     value: totalTokens.toLocaleString(), unit: "" },
-                  { label: "Avg Tokens/Call", value: Math.round(totalTokens / totalPrompts), unit: "" },
-                ].map(({ label, value, unit }) => (
+                  { label: "Total Prompts",   value: totalPrompts },
+                  { label: "Tokens Used",     value: totalTokens.toLocaleString() },
+                  { label: "Avg Tokens/Call", value: Math.round(totalTokens / totalPrompts) },
+                ].map(({ label, value }) => (
                   <div key={label} className="panel p-3">
                     <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider">{label}</p>
-                    <p className="text-[22px] font-mono font-semibold text-foreground mt-1">{value}{unit}</p>
+                    <p className="text-[22px] font-mono font-semibold text-foreground mt-1">{value}</p>
                   </div>
                 ))}
               </div>
 
-              {/* Daily breakdown */}
               <div className="panel p-4">
                 <p className="text-[12px] font-semibold text-foreground mb-3">Daily Breakdown</p>
                 <table className="w-full">
@@ -398,7 +447,6 @@ export default function SettingsPage() {
                 </table>
               </div>
 
-              {/* Usage bar */}
               <div className="panel p-4">
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-[12px] font-semibold text-foreground">Monthly Quota</p>
