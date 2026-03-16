@@ -581,37 +581,56 @@ export default function QueryWorkspace() {
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface flex-shrink-0 flex-wrap">
-        <Selector
-          label="DB"
-          value={dbType}
-          options={[
-            { value: "postgresql", label: "PostgreSQL" },
-            { value: "mongodb", label: "MongoDB" },
-          ]}
-          onChange={(v) => { setDbType(v); setSchema(Object.keys(MOCK_SCHEMAS[v])[0]); setTable(Object.keys(Object.values(MOCK_SCHEMAS[v])[0])[0]); }}
-        />
-        <Selector
-          label="ENV"
-          value={environment}
-          options={[
-            { value: "development" as Environment, label: "Development" },
-            { value: "staging"     as Environment, label: "Staging" },
-            { value: "production"  as Environment, label: "Production" },
-          ]}
-          onChange={(v) => setEnvironment(v as Environment)}
-        />
+        {/* Connection selector */}
+        {connLoading ? (
+          <div className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
+            <Loader2 size={10} className="animate-spin" />
+            Loading…
+          </div>
+        ) : connections.length === 0 ? (
+          <button
+            onClick={() => navigate("/settings")}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-[11.5px] font-mono border border-dashed border-border text-muted-foreground hover:text-foreground hover:border-surface-border transition-snap"
+          >
+            <Plus size={11} />
+            Add Connection
+          </button>
+        ) : (
+          <Selector
+            label="CONN"
+            value={selectedConnId ?? ""}
+            options={connections.map((c) => ({ value: c.id, label: c.name }))}
+            onChange={(v) => setSelectedConnId(v)}
+          />
+        )}
+
+        {activeConn && (
+          <>
+            <span className="text-[10px] font-mono text-muted-foreground border border-border px-1.5 py-0.5 rounded-sm">
+              {activeConn.environment}
+            </span>
+            <span className={cn("ai-badge", activeConn.type === "postgresql" ? "ai-badge-cyan" : "ai-badge-pink")}>
+              {activeConn.type === "postgresql" ? "PostgreSQL" : "MongoDB"}
+            </span>
+          </>
+        )}
+
         <Selector
           label="SCH"
           value={schema}
-          options={Object.keys(MOCK_SCHEMAS[dbType]).map((s) => ({ value: s, label: s }))}
+          options={Object.keys(liveSchemas ?? MOCK_SCHEMAS[dbType]).map((s) => ({ value: s, label: s }))}
           onChange={setSchema}
         />
         <Selector
           label="TBL"
           value={table}
-          options={Object.keys(MOCK_SCHEMAS[dbType][schema] ?? {}).map((t) => ({ value: t, label: t }))}
+          options={Object.keys((liveSchemas ?? MOCK_SCHEMAS[dbType])[schema] ?? {}).map((t) => ({ value: t, label: t }))}
           onChange={setTable}
         />
+
+        {schemaLoading && (
+          <Loader2 size={11} className="animate-spin text-muted-foreground" />
+        )}
 
         <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
           {queryTime !== null && (
@@ -629,6 +648,7 @@ export default function QueryWorkspace() {
           table={table}
           onSchemaChange={setSchema}
           onTableChange={setTable}
+          liveSchemas={liveSchemas ?? undefined}
         />
 
         {/* Main area */}
