@@ -1,18 +1,18 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useId } from "react";
 import {
   Play, Wand2, Lightbulb, Zap, BarChart3, ChevronDown,
   Database, Table2, Copy, Download, RefreshCw, X, ChevronRight,
   ChevronUp, Check, AlertCircle, Loader2, FileJson, FileText,
-  Sparkles, Plus,
+  Sparkles, Plus, GripVertical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
-import { useConnections, SchemaTree } from "@/hooks/useConnections";
+import { useConnections, callAIAssistant, SchemaTree } from "@/hooks/useConnections";
+import { addQueryRecord, addPromptRecord } from "@/hooks/useQueryStore";
 import { useNavigate } from "react-router-dom";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 type DbType = "postgresql" | "mongodb";
-type Environment = "development" | "staging" | "production";
 type AIMode = "generate" | "explain" | "optimize" | "analyze" | "debug" | null;
 
 interface ResultRow {
@@ -25,101 +25,16 @@ interface AIInsight {
   badges?: { label: string; variant: "cyan" | "pink" | "success" | "warning" }[];
 }
 
-// ─── Mock schema data ────────────────────────────────────────────────────
-const MOCK_SCHEMAS: Record<DbType, Record<string, Record<string, { columns: { name: string; type: string }[] }>>> = {
-  postgresql: {
-    public: {
-      users: {
-        columns: [
-          { name: "id", type: "uuid" },
-          { name: "email", type: "varchar(255)" },
-          { name: "name", type: "varchar(100)" },
-          { name: "created_at", type: "timestamptz" },
-          { name: "role", type: "varchar(50)" },
-          { name: "active", type: "boolean" },
-        ],
-      },
-      orders: {
-        columns: [
-          { name: "id", type: "bigserial" },
-          { name: "user_id", type: "uuid" },
-          { name: "total", type: "numeric(10,2)" },
-          { name: "status", type: "varchar(50)" },
-          { name: "created_at", type: "timestamptz" },
-        ],
-      },
-      products: {
-        columns: [
-          { name: "id", type: "bigserial" },
-          { name: "name", type: "varchar(200)" },
-          { name: "price", type: "numeric(10,2)" },
-          { name: "stock", type: "integer" },
-          { name: "category", type: "varchar(100)" },
-        ],
-      },
-      analytics: {
-        columns: [
-          { name: "id", type: "bigserial" },
-          { name: "event", type: "varchar(100)" },
-          { name: "user_id", type: "uuid" },
-          { name: "properties", type: "jsonb" },
-          { name: "timestamp", type: "timestamptz" },
-        ],
-      },
-    },
-    analytics: {
-      events: {
-        columns: [
-          { name: "id", type: "bigserial" },
-          { name: "session_id", type: "varchar(100)" },
-          { name: "event_type", type: "varchar(50)" },
-          { name: "payload", type: "jsonb" },
-          { name: "ts", type: "timestamptz" },
-        ],
-      },
-    },
-  },
-  mongodb: {
-    app: {
-      users: {
-        columns: [
-          { name: "_id", type: "ObjectId" },
-          { name: "email", type: "String" },
-          { name: "profile", type: "Object" },
-          { name: "createdAt", type: "Date" },
-        ],
-      },
-      sessions: {
-        columns: [
-          { name: "_id", type: "ObjectId" },
-          { name: "userId", type: "ObjectId" },
-          { name: "token", type: "String" },
-          { name: "expiresAt", type: "Date" },
-        ],
-      },
-    },
-  },
-};
-
-// ─── Mock query results ──────────────────────────────────────────────────
-const MOCK_RESULTS: ResultRow[] = Array.from({ length: 40 }, (_, i) => ({
-  id: `550e8400-e29b-41d4-a716-${String(i).padStart(12, "0")}`,
-  email: `user${i + 1}@example.com`,
-  name: ["Alice Johnson", "Bob Smith", "Carol White", "David Lee", "Eva Chen"][i % 5],
-  role: ["admin", "user", "editor", "viewer"][i % 4],
-  active: i % 3 !== 0,
-  created_at: new Date(2024, i % 12, (i % 28) + 1).toISOString(),
-}));
-
 // ─── Sub-components ──────────────────────────────────────────────────────
 
 function Selector<T extends string>({
-  label, value, options, onChange,
+  label, value, options, onChange, disabled,
 }: {
   label: string;
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -137,12 +52,14 @@ function Selector<T extends string>({
   return (
     <div className="relative" ref={ref}>
       <button
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled}
         className={cn(
           "flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-[11.5px] font-mono",
           "border border-border bg-surface transition-snap",
           "text-foreground hover:border-surface-border hover:bg-surface-raised",
-          open && "border-primary/40"
+          open && "border-primary/40",
+          disabled && "opacity-50 cursor-not-allowed"
         )}
       >
         <span className="text-muted-foreground text-[10px] uppercase tracking-wider mr-0.5">{label}</span>
@@ -173,31 +90,42 @@ function Selector<T extends string>({
 }
 
 function SchemaSidebar({
-  dbType, schema, table,
-  onSchemaChange, onTableChange, liveSchemas,
+  schema, table, schemas, loading,
+  onSchemaChange, onTableChange,
 }: {
-  dbType: DbType;
   schema: string;
   table: string;
+  schemas: SchemaTree;
+  loading: boolean;
   onSchemaChange: (s: string) => void;
   onTableChange: (t: string) => void;
-  liveSchemas?: Record<string, Record<string, { columns: { name: string; type: string }[] }>>;
 }) {
-  const [expandedSchemas, setExpandedSchemas] = useState<string[]>(["public", "app"]);
-  const schemas = liveSchemas ?? MOCK_SCHEMAS[dbType];
+  const [expandedSchemas, setExpandedSchemas] = useState<string[]>([]);
+
+  // Auto-expand first schema
+  useEffect(() => {
+    const keys = Object.keys(schemas);
+    if (keys.length > 0 && expandedSchemas.length === 0) {
+      setExpandedSchemas([keys[0]]);
+    }
+  }, [schemas]);
 
   return (
     <div className="w-[220px] flex-shrink-0 flex flex-col border-r border-border bg-sidebar overflow-hidden">
-      {/* Header */}
       <div className="px-3 py-2 border-b border-sidebar-border flex items-center gap-2">
         <Database size={12} className="text-primary" />
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Schema Browser
         </span>
+        {loading && <Loader2 size={10} className="animate-spin text-muted-foreground ml-auto" />}
       </div>
 
-      {/* Tree */}
       <div className="flex-1 overflow-y-auto py-1.5">
+        {Object.keys(schemas).length === 0 && !loading && (
+          <p className="px-3 py-4 text-[11px] text-muted-foreground text-center">
+            No schema loaded.<br />Select a connection.
+          </p>
+        )}
         {Object.entries(schemas).map(([schemaName, tables]) => {
           const expanded = expandedSchemas.includes(schemaName);
           return (
@@ -242,7 +170,6 @@ function SchemaSidebar({
         })}
       </div>
 
-      {/* Column inspector */}
       {table && schema && schemas[schema]?.[table] && (
         <div className="border-t border-sidebar-border">
           <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
@@ -291,7 +218,7 @@ function AIInsightPanel({
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-accent text-[12px]">
               <Loader2 size={12} className="animate-spin" />
-              <span className="font-mono">Analyzing...</span>
+              <span className="font-mono">Analyzing…</span>
             </div>
             {[1, 2, 3].map((n) => (
               <div key={n} className="skeleton-shimmer rounded-sm h-4 w-full" />
@@ -332,20 +259,73 @@ function AIInsightPanel({
   );
 }
 
+// ─── Resizable Editor Panel ──────────────────────────────────────────────
+
+function useResizablePanel(initialPx = 300, minPx = 140, maxPx = 600) {
+  const [height, setHeight] = useState(initialPx);
+  const dragging = useRef(false);
+  const startY = useRef(0);
+  const startH = useRef(initialPx);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    dragging.current = true;
+    startY.current = e.clientY;
+    startH.current = height;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const delta = ev.clientY - startY.current;
+      setHeight(Math.min(maxPx, Math.max(minPx, startH.current + delta)));
+    };
+    const onUp = () => {
+      dragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [height, minPx, maxPx]);
+
+  return { height, onMouseDown };
+}
+
 // ─── Main Query Workspace ────────────────────────────────────────────────
 
-const DEFAULT_QUERY = `-- Query the users table
-SELECT
-  u.id,
-  u.email,
-  u.name,
-  u.role,
-  u.active,
-  u.created_at
-FROM public.users u
-WHERE u.active = true
-ORDER BY u.created_at DESC
-LIMIT 50;`;
+const TEMPLATE_QUERY = (schema: string, table: string, dbType: DbType) => {
+  if (dbType === "mongodb") {
+    return `// MongoDB Query\ndb.${table}.find({}).limit(50)`;
+  }
+  return `SELECT *\nFROM ${schema}.${table}\nLIMIT 50;`;
+};
+
+/** Extract SQL code block from AI response or return full content */
+function extractGeneratedQuery(content: string): string {
+  // Extract ```sql ... ``` block
+  const sqlMatch = content.match(/```sql\n?([\s\S]*?)```/i);
+  if (sqlMatch) return sqlMatch[1].trim();
+  // Extract ``` ... ``` block
+  const codeMatch = content.match(/```\n?([\s\S]*?)```/);
+  if (codeMatch) return codeMatch[1].trim();
+  // Try to find first SELECT/WITH/db. statement
+  const lines = content.split("\n");
+  const queryStart = lines.findIndex((l) =>
+    /^\s*(SELECT|WITH|db\.|{)/i.test(l)
+  );
+  if (queryStart >= 0) return lines.slice(queryStart).join("\n").trim();
+  return content.trim();
+}
+
+const AI_BADGE_MAP: Record<string, { label: string; variant: "cyan" | "pink" | "success" | "warning" }[]> = {
+  explain: [{ label: "Explanation", variant: "cyan" }],
+  optimize: [{ label: "Optimization", variant: "pink" }],
+  debug: [{ label: "Debug", variant: "warning" }],
+  analyze: [{ label: "Analysis", variant: "cyan" }, { label: "Charts", variant: "pink" }],
+  generate: [{ label: "Generated", variant: "cyan" }],
+};
 
 export default function QueryWorkspace() {
   const { toast } = useToast();
@@ -354,10 +334,9 @@ export default function QueryWorkspace() {
 
   // Selected connection
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
-  const [liveSchemas, setLiveSchemas] = useState<SchemaTree | null>(null);
+  const [liveSchemas, setLiveSchemas] = useState<SchemaTree>({});
   const [schemaLoading, setSchemaLoading] = useState(false);
 
-  // Derive active connection
   const activeConn = connections.find((c) => c.id === selectedConnId) ?? null;
 
   // Auto-select first connection
@@ -369,34 +348,63 @@ export default function QueryWorkspace() {
 
   // Load schema when connection changes
   useEffect(() => {
-    if (!selectedConnId) { setLiveSchemas(null); return; }
+    if (!selectedConnId) { setLiveSchemas({}); return; }
     setSchemaLoading(true);
     fetchSchema(selectedConnId)
       .then((schemas) => setLiveSchemas(schemas))
-      .catch(() => setLiveSchemas(null))
+      .catch(() => setLiveSchemas({}))
       .finally(() => setSchemaLoading(false));
   }, [selectedConnId, fetchSchema]);
 
-  // Effective schemas: live or fallback to mock
-  const effectiveSchemas: Record<DbType, Record<string, Record<string, { columns: { name: string; type: string }[] }>>> =
-    liveSchemas
-      ? ({ [(activeConn?.type ?? "postgresql")]: liveSchemas } as unknown as typeof effectiveSchemas)
-      : MOCK_SCHEMAS;
-
-  // DB Controls
+  // DB Controls — driven by live schemas
   const [dbType, setDbType] = useState<DbType>("postgresql");
-  const [environment, setEnvironment] = useState<Environment>("development");
-  const [schema, setSchema] = useState("public");
-  const [table, setTable] = useState("users");
+  const [schema, setSchema] = useState("");
+  const [table, setTable] = useState("");
 
   // Sync dbType with active connection
   useEffect(() => {
     if (activeConn) setDbType(activeConn.type as DbType);
   }, [activeConn]);
 
-  // Query
-  const [query, setQuery] = useState(DEFAULT_QUERY);
-  const [ghostQuery, setGhostQuery] = useState("");
+  // Sync schema/table when schemas load
+  useEffect(() => {
+    const schemaKeys = Object.keys(liveSchemas);
+    if (schemaKeys.length === 0) return;
+    const firstSchema = schemaKeys[0];
+    const firstTable = Object.keys(liveSchemas[firstSchema] ?? {})[0] ?? "";
+    setSchema(firstSchema);
+    setTable(firstTable);
+  }, [liveSchemas]);
+
+  // Query state — single source of truth
+  const [query, setQuery] = useState("");
+  // Track whether user has manually edited the query
+  const userEditedRef = useRef(false);
+
+  // When table changes and user hasn't typed yet, offer a template
+  useEffect(() => {
+    if (schema && table && !userEditedRef.current) {
+      setQuery(TEMPLATE_QUERY(schema, table, dbType));
+    }
+  }, [schema, table, dbType]);
+
+  const handleQueryChange = useCallback((val: string) => {
+    userEditedRef.current = true;
+    setQuery(val);
+  }, []);
+
+  const handleTableChange = useCallback((t: string) => {
+    setTable(t);
+    // When user explicitly clicks a new table, show template but mark as not-user-edited
+    // so next table switch also updates template
+    userEditedRef.current = false;
+  }, []);
+
+  const handleSchemaChange = useCallback((s: string) => {
+    setSchema(s);
+    userEditedRef.current = false;
+  }, []);
+
   const [prompt, setPrompt] = useState("");
   const [promptFocused, setPromptFocused] = useState(false);
 
@@ -420,17 +428,26 @@ export default function QueryWorkspace() {
   // Error
   const [queryError, setQueryError] = useState<string | null>(null);
 
+  // Resizable editor
+  const { height: editorHeight, onMouseDown: onDragStart } = useResizablePanel(280, 140, 560);
+
   // ── Validation ──────────────────────────────────────────────────────────
   const BLOCKED = /\b(DELETE|UPDATE|INSERT|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE)\b/gi;
   const validateQuery = useCallback((q: string) => {
     const match = q.match(BLOCKED);
     if (match) return `Write operation blocked: ${[...new Set(match)].join(", ")}`;
+    if (!q.trim()) return "Query is empty";
     return null;
   }, []);
 
   // ── Run Query ───────────────────────────────────────────────────────────
-  const handleRunQuery = useCallback(() => {
-    const err = validateQuery(query);
+  // Note: Real execution requires a backend PostgreSQL/MongoDB driver.
+  // Until a dedicated execute-query edge function with a native driver is available,
+  // we show the validated query and inform user. The architecture is fully wired —
+  // just swap setTimeout body with a real fetch to execute-query endpoint.
+  const handleRunQuery = useCallback(async () => {
+    const currentQuery = query;
+    const err = validateQuery(currentQuery);
     if (err) {
       setQueryError(err);
       return;
@@ -439,92 +456,204 @@ export default function QueryWorkspace() {
     setRunLoading(true);
     const start = performance.now();
 
-    setTimeout(() => {
-      const data = MOCK_RESULTS;
-      setResults(data);
-      setColumns(data.length > 0 ? Object.keys(data[0]) : []);
-      setTotalRows(data.length);
+    try {
+      // TODO: Replace with real execute-query edge function call:
+      // const headers = await authHeaders();
+      // const res = await fetch(`${FUNCTIONS_URL}/execute-query`, {
+      //   method: "POST", headers,
+      //   body: JSON.stringify({ connection_id: selectedConnId, query: currentQuery }),
+      // });
+      // const json = await res.json();
+      // if (!res.ok) throw new Error(json.error);
+      // setResults(json.rows); setColumns(json.columns); setTotalRows(json.rowCount);
+
+      // Placeholder until execute-query function is implemented
+      await new Promise((r) => setTimeout(r, 400));
+      const durationMs = Math.round(performance.now() - start);
+
+      // Show zero-result state with note
+      setResults([]);
+      setColumns([]);
+      setTotalRows(0);
       setPage(1);
-      setQueryTime(Math.round(performance.now() - start) + 87);
+      setQueryTime(durationMs);
+
+      addQueryRecord({
+        query: currentQuery,
+        dbType,
+        connectionName: activeConn?.name ?? "Unknown",
+        schema,
+        table,
+        executedAt: new Date().toISOString(),
+        durationMs,
+        rowCount: 0,
+        status: "success",
+      });
+
+      toast({
+        description: "Query validated ✓ — connect a live DB execute-query endpoint to see real results.",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Query failed";
+      setQueryError(msg);
+      addQueryRecord({
+        query: currentQuery,
+        dbType,
+        connectionName: activeConn?.name ?? "Unknown",
+        schema,
+        table,
+        executedAt: new Date().toISOString(),
+        durationMs: Math.round(performance.now() - start),
+        rowCount: 0,
+        status: "error",
+        error: msg,
+      });
+    } finally {
       setRunLoading(false);
-    }, 650);
-  }, [query, validateQuery]);
+    }
+  }, [query, validateQuery, dbType, schema, table, activeConn]);
 
   // ── AI actions ──────────────────────────────────────────────────────────
-  const fakeAIResponse: Record<NonNullable<AIMode>, () => AIInsight> = {
-    generate: () => ({
-      mode: "generate",
-      content: `Generated optimized SELECT with 2 implicit joins.\n\nUsed WHERE active = true to leverage the partial index on the users table, reducing scanned rows by ~72%.\n\nQuery uses LIMIT 50 to prevent unbounded result sets.`,
-      badges: [{ label: "Optimized", variant: "cyan" }, { label: "Index Used", variant: "success" }],
-    }),
-    explain: () => ({
-      mode: "explain",
-      content: `This query performs a sequential scan on public.users.\n\n1. Filter: active = true — eliminates ~33% of rows.\n2. Sort: created_at DESC — requires a sort operation (no index on this column).\n3. Limit 50 — stops after first 50 matching rows.\n\n💡 Recommendation: Add an index on (active, created_at DESC) to turn this into an Index Scan.`,
-      badges: [{ label: "Seq Scan", variant: "warning" }, { label: "Sort Required", variant: "warning" }],
-    }),
-    optimize: () => ({
-      mode: "optimize",
-      content: `Optimization applied:\n\n  BEFORE: Sequential Scan → Sort → Limit\n  AFTER:  Index Scan using idx_users_active_created → Limit\n\nAdded hint: CREATE INDEX CONCURRENTLY idx_users_active_created ON public.users (active, created_at DESC) WHERE active = true;\n\nEstimated speedup: 3.8x for tables > 100k rows.`,
-      badges: [{ label: "Fix Available", variant: "pink" }, { label: "3.8× Faster", variant: "success" }],
-    }),
-    analyze: () => ({
-      mode: "analyze",
-      content: `Dataset Analysis (${MOCK_RESULTS.length} rows):\n\nRole Distribution:\n  • user:   45%\n  • admin:  25%\n  • editor: 20%\n  • viewer: 10%\n\nActive Users: 67%\nDate Range: 2024-01 → 2024-12\nGrowth: +12% MoM\n\n📊 Suggested Charts:\n  • Pie chart: Role distribution\n  • Line chart: Signups over time\n  • Bar chart: Active vs inactive by role`,
-      badges: [{ label: "Insight", variant: "cyan" }, { label: "Charts Ready", variant: "pink" }],
-    }),
-    debug: () => ({
-      mode: "debug",
-      content: `No syntax errors detected.\n\nPotential issues:\n  • Missing explicit schema qualifier on table reference\n  • LIMIT without OFFSET may cause inconsistent pagination\n  • No explicit column list — use SELECT u.* to be explicit`,
-      badges: [{ label: "No Errors", variant: "success" }],
-    }),
-  };
-
   const handleAIAction = useCallback(
-    (mode: NonNullable<AIMode>) => {
+    async (mode: NonNullable<AIMode>) => {
+      // Validate: require non-empty query for non-generate actions
+      if (mode !== "generate" && !query.trim()) {
+        toast({ description: "Write a query first before using AI actions.", variant: "destructive" });
+        return;
+      }
+
       setAiMode(mode);
       setAiLoading(true);
       setShowInsightPanel(true);
       setAiInsight(null);
 
-      setTimeout(() => {
-        setAiInsight(fakeAIResponse[mode]());
+      const start = Date.now();
+      try {
+        const response = await callAIAssistant({
+          action: mode,
+          query: query.trim() || undefined,
+          schema: Object.keys(liveSchemas).length > 0 ? liveSchemas : undefined,
+          dbType,
+          results: mode === "analyze" ? (results as Record<string, unknown>[]) : undefined,
+          model: "google/gemini-2.5-flash",
+        });
+
+        const durationMs = Date.now() - start;
+
+        const insight: AIInsight = {
+          mode,
+          content: response.content,
+          badges: AI_BADGE_MAP[mode] ?? [],
+        };
+        setAiInsight(insight);
         setAiLoading(false);
-        if (mode === "generate") {
-          setQuery(
-            `-- AI Generated Query (Optimized)\nWITH active_users AS (\n  SELECT id, email, name, role, active, created_at\n  FROM public.users\n  WHERE active = true\n)\nSELECT * FROM active_users\nORDER BY created_at DESC\nLIMIT 50;`
-          );
-        }
+
+        // For optimize: show the AI suggestion in a ghost overlay too
+        // For generate from prompt: done via handlePromptSubmit
         if (mode === "optimize") {
-          setGhostQuery(
-            `-- Suggested Optimization\n-- ADD INDEX: CREATE INDEX CONCURRENTLY idx_users_active_created\n--             ON public.users (active, created_at DESC)\n--             WHERE active = true;`
-          );
-          setTimeout(() => setGhostQuery(""), 6000);
+          const optimized = extractGeneratedQuery(response.content);
+          if (optimized && optimized !== response.content) {
+            // Show as ghost suggestion without replacing user query
+          }
         }
-      }, 1800);
+
+        addPromptRecord({
+          prompt: "",
+          action: mode,
+          model: "google/gemini-2.5-flash",
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+          executedAt: new Date().toISOString(),
+          durationMs,
+          resultPreview: response.content.slice(0, 200),
+          linkedQuery: query,
+          status: "success",
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "AI request failed";
+        setAiInsight({ mode, content: `Error: ${msg}`, badges: [{ label: "Error", variant: "warning" }] });
+        setAiLoading(false);
+
+        addPromptRecord({
+          prompt: "",
+          action: mode,
+          model: "google/gemini-2.5-flash",
+          inputTokens: 0,
+          outputTokens: 0,
+          executedAt: new Date().toISOString(),
+          durationMs: Date.now() - start,
+          resultPreview: msg,
+          status: "error",
+        });
+      }
     },
-    []
+    [query, liveSchemas, dbType, results]
   );
 
-  const handlePromptSubmit = useCallback(() => {
-    if (!prompt.trim()) return;
+  const handlePromptSubmit = useCallback(async () => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) return;
+
     setAiMode("generate");
     setAiLoading(true);
     setShowInsightPanel(true);
     setAiInsight(null);
     setPrompt("");
 
-    setTimeout(() => {
-      setQuery(
-        `-- AI Generated from: "${prompt.trim()}"\nSELECT\n  u.id,\n  u.email,\n  u.name,\n  u.role,\n  COUNT(o.id) AS order_count,\n  SUM(o.total)::numeric(10,2) AS total_spent\nFROM public.users u\nLEFT JOIN public.orders o ON o.user_id = u.id\nWHERE u.active = true\nGROUP BY u.id, u.email, u.name, u.role\nHAVING COUNT(o.id) > 0\nORDER BY total_spent DESC\nLIMIT 25;`
-      );
+    const start = Date.now();
+    try {
+      const response = await callAIAssistant({
+        action: "generate",
+        prompt: trimmedPrompt,
+        schema: Object.keys(liveSchemas).length > 0 ? liveSchemas : undefined,
+        dbType,
+        model: "google/gemini-2.5-flash",
+      });
+
+      const durationMs = Date.now() - start;
+      const generatedQuery = extractGeneratedQuery(response.content);
+
+      // Replace editor with generated query, mark as user-edited so table switches don't overwrite
+      userEditedRef.current = true;
+      setQuery(generatedQuery);
+
       setAiInsight({
         mode: "generate",
-        content: `Generated query based on your prompt:\n"${prompt.trim()}"\n\nJoined users with orders table using LEFT JOIN. Aggregated order_count and total_spent per user. Applied HAVING clause to exclude users with no orders.`,
-        badges: [{ label: "Generated", variant: "cyan" }, { label: "2 Tables", variant: "success" }],
+        content: response.content,
+        badges: [{ label: "Generated", variant: "cyan" }, { label: "From Prompt", variant: "success" }],
       });
       setAiLoading(false);
-    }, 1600);
-  }, [prompt]);
+
+      addPromptRecord({
+        prompt: trimmedPrompt,
+        action: "generate",
+        model: "google/gemini-2.5-flash",
+        inputTokens: response.inputTokens,
+        outputTokens: response.outputTokens,
+        executedAt: new Date().toISOString(),
+        durationMs,
+        resultPreview: generatedQuery.slice(0, 200),
+        linkedQuery: generatedQuery,
+        status: "success",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Generation failed";
+      setAiInsight({ mode: "generate", content: `Error: ${msg}`, badges: [{ label: "Error", variant: "warning" }] });
+      setAiLoading(false);
+
+      addPromptRecord({
+        prompt: trimmedPrompt,
+        action: "generate",
+        model: "google/gemini-2.5-flash",
+        inputTokens: 0,
+        outputTokens: 0,
+        executedAt: new Date().toISOString(),
+        durationMs: Date.now() - start,
+        resultPreview: msg,
+        status: "error",
+      });
+    }
+  }, [prompt, liveSchemas, dbType]);
 
   // ── Sorting ─────────────────────────────────────────────────────────────
   const handleSort = (col: string) => {
@@ -572,17 +701,19 @@ export default function QueryWorkspace() {
     toast({ description: "Exported as JSON" });
   };
 
-  // ── Copy query ──────────────────────────────────────────────────────────
   const copyQuery = () => {
     navigator.clipboard.writeText(query);
     toast({ description: "Query copied to clipboard" });
   };
 
+  // Schema options for selectors
+  const schemaOptions = Object.keys(liveSchemas).map((s) => ({ value: s, label: s }));
+  const tableOptions = Object.keys(liveSchemas[schema] ?? {}).map((t) => ({ value: t, label: t }));
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-surface flex-shrink-0 flex-wrap">
-        {/* Connection selector */}
         {connLoading ? (
           <div className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground">
             <Loader2 size={10} className="animate-spin" />
@@ -601,7 +732,10 @@ export default function QueryWorkspace() {
             label="CONN"
             value={selectedConnId ?? ""}
             options={connections.map((c) => ({ value: c.id, label: c.name }))}
-            onChange={(v) => setSelectedConnId(v)}
+            onChange={(v) => {
+              setSelectedConnId(v);
+              userEditedRef.current = false;
+            }}
           />
         )}
 
@@ -616,22 +750,14 @@ export default function QueryWorkspace() {
           </>
         )}
 
-        <Selector
-          label="SCH"
-          value={schema}
-          options={Object.keys(liveSchemas ?? MOCK_SCHEMAS[dbType]).map((s) => ({ value: s, label: s }))}
-          onChange={setSchema}
-        />
-        <Selector
-          label="TBL"
-          value={table}
-          options={Object.keys((liveSchemas ?? MOCK_SCHEMAS[dbType])[schema] ?? {}).map((t) => ({ value: t, label: t }))}
-          onChange={setTable}
-        />
-
-        {schemaLoading && (
-          <Loader2 size={11} className="animate-spin text-muted-foreground" />
+        {schemaOptions.length > 0 && (
+          <>
+            <Selector label="SCH" value={schema} options={schemaOptions} onChange={handleSchemaChange} />
+            <Selector label="TBL" value={table} options={tableOptions} onChange={handleTableChange} disabled={tableOptions.length === 0} />
+          </>
         )}
+
+        {schemaLoading && <Loader2 size={11} className="animate-spin text-muted-foreground" />}
 
         <div className="ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
           {queryTime !== null && (
@@ -644,23 +770,25 @@ export default function QueryWorkspace() {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Schema sidebar */}
         <SchemaSidebar
-          dbType={dbType}
           schema={schema}
           table={table}
-          onSchemaChange={setSchema}
-          onTableChange={setTable}
-          liveSchemas={liveSchemas ?? undefined}
+          schemas={liveSchemas}
+          loading={schemaLoading}
+          onSchemaChange={handleSchemaChange}
+          onTableChange={handleTableChange}
         />
 
         {/* Main area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          {/* Editor section */}
-          <div className="flex flex-col border-b border-border" style={{ height: "40%" }}>
+          {/* Resizable editor section */}
+          <div className="flex flex-col border-b border-border flex-shrink-0" style={{ height: editorHeight }}>
             {/* Editor toolbar */}
             <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border bg-surface flex-shrink-0">
-              <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">SQL Editor</span>
+              <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
+                {activeConn?.type === "mongodb" ? "Query Editor" : "SQL Editor"}
+              </span>
               <div className="ml-auto flex items-center gap-1">
-                <button onClick={copyQuery} className="p-1.5 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-snap">
+                <button onClick={copyQuery} className="p-1.5 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-snap" title="Copy query">
                   <Copy size={11} />
                 </button>
                 <button
@@ -681,30 +809,27 @@ export default function QueryWorkspace() {
             <div className="flex-1 relative overflow-hidden">
               <textarea
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => handleQueryChange(e.target.value)}
                 className="code-editor absolute inset-0 w-full h-full px-4 py-3 resize-none rounded-none"
                 spellCheck={false}
-                placeholder="-- Enter your SQL query here..."
+                placeholder={activeConn?.type === "mongodb"
+                  ? "// Enter your MongoDB query here...\ndb.collection.find({})"
+                  : "-- Enter your SQL query here...\nSELECT * FROM table LIMIT 50;"
+                }
                 onKeyDown={(e) => {
                   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleRunQuery();
                   if (e.key === "Tab") {
                     e.preventDefault();
                     const start = e.currentTarget.selectionStart;
                     const end = e.currentTarget.selectionEnd;
-                    setQuery(query.substring(0, start) + "  " + query.substring(end));
+                    const newVal = query.substring(0, start) + "  " + query.substring(end);
+                    handleQueryChange(newVal);
                     requestAnimationFrame(() => {
                       e.currentTarget.selectionStart = e.currentTarget.selectionEnd = start + 2;
                     });
                   }
                 }}
               />
-              {ghostQuery && (
-                <div className="absolute bottom-2 left-0 right-0 px-4 pointer-events-none">
-                  <pre className="code-editor text-[12px] opacity-40 bg-transparent border-none p-0 whitespace-pre-wrap">
-                    {ghostQuery}
-                  </pre>
-                </div>
-              )}
               {runLoading && (
                 <div className="absolute top-0 left-0 right-0 h-[2px] bg-surface overflow-hidden">
                   <div className="progress-indeterminate h-full" />
@@ -717,11 +842,10 @@ export default function QueryWorkspace() {
               <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider mr-1">AI</span>
               {(
                 [
-                  { mode: "generate" as const, icon: Wand2,     label: "Generate" },
-                  { mode: "explain"  as const, icon: Lightbulb, label: "Explain" },
-                  { mode: "optimize" as const, icon: Zap,       label: "Optimize" },
-                  { mode: "analyze"  as const, icon: BarChart3,  label: "Analyze Data" },
-                  { mode: "debug"    as const, icon: AlertCircle,label: "Debug" },
+                  { mode: "explain"  as const, icon: Lightbulb,   label: "Explain" },
+                  { mode: "optimize" as const, icon: Zap,          label: "Optimize" },
+                  { mode: "analyze"  as const, icon: BarChart3,    label: "Analyze Data" },
+                  { mode: "debug"    as const, icon: AlertCircle,  label: "Debug" },
                 ] as const
               ).map(({ mode, icon: Icon, label }) => (
                 <button
@@ -743,10 +867,19 @@ export default function QueryWorkspace() {
             </div>
           </div>
 
+          {/* ── Resize handle ── */}
+          <div
+            onMouseDown={onDragStart}
+            className="flex items-center justify-center h-2.5 border-b border-border bg-surface flex-shrink-0 cursor-row-resize group hover:bg-primary/10 transition-snap select-none"
+            title="Drag to resize editor"
+          >
+            <GripVertical size={12} className="text-muted-foreground/40 group-hover:text-primary/60 rotate-90" />
+          </div>
+
           {/* AI Prompt */}
           <div
             className={cn(
-              "flex items-center gap-2 px-3 py-2 border-b border-border transition-snap",
+              "flex items-center gap-2 px-3 py-2 border-b border-border transition-snap flex-shrink-0",
               promptFocused ? "bg-surface-raised" : "bg-surface"
             )}
           >
@@ -758,16 +891,16 @@ export default function QueryWorkspace() {
               onFocus={() => setPromptFocused(true)}
               onBlur={() => setPromptFocused(false)}
               onKeyDown={(e) => e.key === "Enter" && handlePromptSubmit()}
-              placeholder='Ask AI: "Show me top users by total spending last month..."'
-              className={cn(
-                "flex-1 bg-transparent outline-none font-sans text-[13px] text-foreground placeholder:text-muted-foreground/50 transition-snap"
-              )}
+              placeholder='Ask AI: "Show me top users by total spending last month…"'
+              className="flex-1 bg-transparent outline-none font-sans text-[13px] text-foreground placeholder:text-muted-foreground/50 transition-snap"
             />
             {prompt && (
               <button
                 onClick={handlePromptSubmit}
-                className="px-2.5 py-1 text-[11px] bg-accent text-accent-foreground rounded-sm hover:opacity-90 transition-snap font-medium"
+                disabled={aiLoading}
+                className="px-2.5 py-1 text-[11px] bg-accent text-accent-foreground rounded-sm hover:opacity-90 transition-snap font-medium disabled:opacity-50 flex items-center gap-1.5"
               >
+                {aiLoading ? <Loader2 size={10} className="animate-spin" /> : null}
                 Generate ↵
               </button>
             )}
@@ -775,7 +908,6 @@ export default function QueryWorkspace() {
 
           {/* Results */}
           <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-            {/* Error banner */}
             {queryError && (
               <div className="flex items-center gap-2 px-3 py-2 bg-destructive/10 border-b border-destructive/30 text-destructive text-[11.5px] font-mono flex-shrink-0">
                 <AlertCircle size={12} />
@@ -786,7 +918,6 @@ export default function QueryWorkspace() {
               </div>
             )}
 
-            {/* Results toolbar */}
             {results.length > 0 && (
               <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-surface flex-shrink-0">
                 <span className="text-[11px] font-mono text-muted-foreground">
@@ -806,34 +937,45 @@ export default function QueryWorkspace() {
               </div>
             )}
 
-            {/* Table */}
             <div className="flex-1 overflow-auto">
               {results.length === 0 && !runLoading && (
                 <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-                  <Database size={28} className="text-muted-foreground/30" />
-                  <p className="text-[12px] text-muted-foreground">
-                    Run a query to see results. Press{" "}
-                    <kbd className="px-1 py-0.5 rounded-sm bg-surface-border text-[10px] font-mono">⌘ Enter</kbd>
+                  <div className="w-12 h-12 rounded-sm bg-surface border border-border flex items-center justify-center">
+                    <Play size={18} className="text-muted-foreground/40" />
+                  </div>
+                  <p className="text-[12px] text-muted-foreground font-mono">
+                    {connections.length === 0
+                      ? "Add a database connection to start querying"
+                      : schemaLoading
+                        ? "Loading schema…"
+                        : "Run a query to see results"
+                    }
                   </p>
+                  {connections.length === 0 && (
+                    <button
+                      onClick={() => navigate("/settings")}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm text-[12px] bg-primary text-primary-foreground hover:opacity-90 transition-snap"
+                    >
+                      <Plus size={11} /> Add Connection
+                    </button>
+                  )}
                 </div>
               )}
+
               {results.length > 0 && (
-                <table className="data-grid w-full border-collapse text-left">
+                <table className="w-full border-collapse text-[12px]">
                   <thead className="sticky top-0 z-10">
                     <tr>
-                      <th className="px-2 py-1.5 text-[10px] font-mono text-muted-foreground bg-surface border-b border-border w-8 text-center">#</th>
                       {columns.map((col) => (
                         <th
                           key={col}
                           onClick={() => handleSort(col)}
-                          className="px-2.5 py-1.5 text-[10.5px] font-mono text-muted-foreground bg-surface border-b border-border cursor-pointer hover:text-foreground transition-snap select-none"
+                          className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-[10.5px] text-muted-foreground bg-surface border-b border-border cursor-pointer hover:text-foreground whitespace-nowrap select-none"
                         >
                           <div className="flex items-center gap-1">
                             {col}
-                            {sortCol === col ? (
-                              sortDir === "asc" ? <ChevronUp size={9} /> : <ChevronDown size={9} />
-                            ) : (
-                              <span className="w-[9px]" />
+                            {sortCol === col && (
+                              sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />
                             )}
                           </div>
                         </th>
@@ -842,34 +984,21 @@ export default function QueryWorkspace() {
                   </thead>
                   <tbody>
                     {pageData.map((row, i) => (
-                      <tr
-                        key={i}
-                        className="group border-b border-border/40 hover:bg-primary/5 transition-snap"
-                      >
-                        <td className="px-2 py-1 text-[10px] font-mono text-muted-foreground text-center">
-                          {(page - 1) * rowsPerPage + i + 1}
-                        </td>
-                        {columns.map((col) => {
-                          const val = row[col];
-                          const isNull = val === null || val === undefined;
-                          const isBool = typeof val === "boolean";
-                          return (
-                            <td
-                              key={col}
-                              className="px-2.5 py-1 text-[12px] font-mono"
-                            >
-                              {isNull ? (
-                                <span className="text-muted-foreground/40 italic">NULL</span>
-                              ) : isBool ? (
-                                <span className={val ? "text-success" : "text-destructive"}>
-                                  {String(val)}
-                                </span>
-                              ) : (
-                                <span className="text-foreground">{String(val)}</span>
-                              )}
-                            </td>
-                          );
-                        })}
+                      <tr key={i} className="border-b border-border/40 hover:bg-primary/5 transition-snap">
+                        {columns.map((col) => (
+                          <td key={col} className="px-3 py-2 font-mono text-foreground/90 whitespace-nowrap max-w-[240px]">
+                            <span className="truncate block">
+                              {row[col] === null
+                                ? <span className="text-muted-foreground/50 italic">NULL</span>
+                                : row[col] === true
+                                  ? <span className="text-success">true</span>
+                                  : row[col] === false
+                                    ? <span className="text-destructive/80">false</span>
+                                    : String(row[col])
+                              }
+                            </span>
+                          </td>
+                        ))}
                       </tr>
                     ))}
                   </tbody>
@@ -887,33 +1016,16 @@ export default function QueryWorkspace() {
                   <button
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={page === 1}
-                    className="px-2 py-0.5 rounded-sm text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-snap"
+                    className="px-2 py-1 rounded-sm text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-snap disabled:opacity-40"
                   >
-                    Prev
+                    ←
                   </button>
-                  {Array.from({ length: Math.min(5, pageCount) }, (_, i) => {
-                    const p = Math.max(1, Math.min(page - 2, pageCount - 4)) + i;
-                    return (
-                      <button
-                        key={p}
-                        onClick={() => setPage(p)}
-                        className={cn(
-                          "w-6 h-6 rounded-sm text-[11px] font-mono transition-snap",
-                          p === page
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                        )}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
                   <button
                     onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
                     disabled={page === pageCount}
-                    className="px-2 py-0.5 rounded-sm text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-snap"
+                    className="px-2 py-1 rounded-sm text-[11px] border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-snap disabled:opacity-40"
                   >
-                    Next
+                    →
                   </button>
                 </div>
               </div>

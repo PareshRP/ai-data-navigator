@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { X, Database, Eye, EyeOff, Loader2, AlertCircle, Check } from "lucide-react";
+import { X, Database, Eye, EyeOff, Loader2, AlertCircle, Check, Wifi, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NewConnection } from "@/hooks/useConnections";
+import { NewConnection, testConnectionReal } from "@/hooks/useConnections";
 
 interface Props {
   onClose: () => void;
@@ -12,6 +12,8 @@ type DbType = "postgresql" | "mongodb";
 type Env = "development" | "staging" | "production";
 
 const DEFAULT_PORTS: Record<DbType, number> = { postgresql: 5432, mongodb: 27017 };
+
+type TestState = "idle" | "testing" | "success" | "fail";
 
 export default function AddConnectionDialog({ onClose, onAdd }: Props) {
   const [form, setForm] = useState<NewConnection>({
@@ -29,17 +31,86 @@ export default function AddConnectionDialog({ onClose, onAdd }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const set = (field: keyof NewConnection, value: unknown) =>
+  // Test connection state
+  const [testState, setTestState] = useState<TestState>("idle");
+  const [testError, setTestError] = useState<string | null>(null);
+  const [testLatency, setTestLatency] = useState<number | null>(null);
+
+  // Temporary connection ID for testing (created on test, used for save)
+  const [tempConnId, setTempConnId] = useState<string | null>(null);
+
+  const set = (field: keyof NewConnection, value: unknown) => {
     setForm((f) => ({ ...f, [field]: value }));
+    // Reset test state when form changes
+    setTestState("idle");
+    setTestError(null);
+    setTempConnId(null);
+  };
 
   const handleTypeChange = (type: DbType) => {
     set("type", type);
     set("port", DEFAULT_PORTS[type]);
   };
 
+  /** Test connection: creates a temp connection, tests it, stores the ID */
+  const handleTest = async () => {
+    if (!form.host || !form.port || !form.database_name || !form.username || !form.password) {
+      setTestError("Fill in all fields before testing.");
+      return;
+    }
+    setTestState("testing");
+    setTestError(null);
+    setTestLatency(null);
+
+    try {
+      // First create the connection record (so the edge fn can retrieve credentials)
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const { supabase } = await import("@/integrations/supabase/client");
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) headers["Authorization"] = `Bearer ${session.access_token}`;
+
+      const createRes = await fetch(
+        `https://ioekedmzkawxbptoypkf.supabase.co/functions/v1/manage-connections`,
+        { method: "POST", headers, body: JSON.stringify(form) }
+      );
+      const createJson = await createRes.json();
+      if (!createRes.ok) throw new Error(createJson.error ?? "Failed to create connection for test");
+
+      const connId: string = createJson.connection.id;
+      setTempConnId(connId);
+
+      // Now test the connection
+      const result = await testConnectionReal(connId);
+      setTestLatency(result.latencyMs ?? null);
+
+      if (result.success) {
+        setTestState("success");
+      } else {
+        setTestState("fail");
+        setTestError(result.error ?? "Connection failed");
+        // Delete the temp connection since test failed
+        await fetch(
+          `https://ioekedmzkawxbptoypkf.supabase.co/functions/v1/manage-connections?id=${connId}`,
+          { method: "DELETE", headers }
+        );
+        setTempConnId(null);
+      }
+    } catch (e) {
+      setTestState("fail");
+      setTestError(e instanceof Error ? e.message : "Test failed");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    // If test was already successful we have the connection saved already
+    if (tempConnId) {
+      onClose();
+      return;
+    }
+
     setSaving(true);
     try {
       await onAdd(form);
@@ -55,10 +126,13 @@ export default function AddConnectionDialog({ onClose, onAdd }: Props) {
     "w-full code-editor px-2.5 py-2 rounded-sm text-[12px] focus:outline-none focus:ring-1 focus:ring-primary/40";
   const labelClass = "block text-[10.5px] text-muted-foreground uppercase tracking-wider mb-1";
 
+  const canSubmit = testState === "success" || true; // allow save without test
+  const allFilled = form.host && form.database_name && form.username && form.password && form.name;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
       <div
-        className="w-full max-w-[520px] panel-raised shadow-panel animate-fade-in mx-4 max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-[540px] panel-raised shadow-panel animate-fade-in mx-4 max-h-[92vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -228,6 +302,20 @@ export default function AddConnectionDialog({ onClose, onAdd }: Props) {
             </span>
           </div>
 
+          {/* Test connection result */}
+          {testState === "success" && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-success/10 border border-success/30 text-success text-[11.5px] font-mono">
+              <Wifi size={11} />
+              Connected successfully{testLatency ? ` · ${testLatency}ms` : ""}
+            </div>
+          )}
+          {testState === "fail" && testError && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-destructive/10 border border-destructive/20 text-destructive text-[11.5px] font-mono">
+              <WifiOff size={11} />
+              {testError}
+            </div>
+          )}
+
           {/* Error */}
           {error && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-sm bg-destructive/10 border border-destructive/20 text-destructive text-[11.5px] font-mono">
@@ -237,22 +325,48 @@ export default function AddConnectionDialog({ onClose, onAdd }: Props) {
           )}
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-2">
+          <div className="flex items-center justify-between gap-2 pt-2">
             <button
               type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 rounded-sm text-[12px] text-muted-foreground hover:text-foreground border border-border hover:bg-muted transition-snap"
+              onClick={handleTest}
+              disabled={testState === "testing" || !allFilled}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded-sm text-[12px] border transition-snap disabled:opacity-50",
+                testState === "success"
+                  ? "border-success/40 text-success bg-success/10"
+                  : testState === "fail"
+                    ? "border-destructive/40 text-destructive bg-destructive/10"
+                    : "border-border text-muted-foreground hover:text-foreground hover:bg-muted"
+              )}
             >
-              Cancel
+              {testState === "testing" ? (
+                <><Loader2 size={11} className="animate-spin" /> Testing…</>
+              ) : testState === "success" ? (
+                <><Check size={11} /> Connected</>
+              ) : testState === "fail" ? (
+                <><WifiOff size={11} /> Retry Test</>
+              ) : (
+                <><Wifi size={11} /> Test Connection</>
+              )}
             </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-sm text-[12px] bg-primary text-primary-foreground hover:opacity-90 transition-snap disabled:opacity-50"
-            >
-              {saving && <Loader2 size={11} className="animate-spin" />}
-              {saving ? "Saving…" : "Add Connection"}
-            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1.5 rounded-sm text-[12px] text-muted-foreground hover:text-foreground border border-border hover:bg-muted transition-snap"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving || testState === "testing"}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-sm text-[12px] bg-primary text-primary-foreground hover:opacity-90 transition-snap disabled:opacity-50"
+              >
+                {saving && <Loader2 size={11} className="animate-spin" />}
+                {saving ? "Saving…" : testState === "success" ? "Save Connection" : "Add Connection"}
+              </button>
+            </div>
           </div>
         </form>
       </div>
