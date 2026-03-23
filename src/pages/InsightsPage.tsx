@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   BarChart3, TrendingUp, PieChart, Activity,
-  Users, ShoppingCart, Package, Zap,
+  Zap, RefreshCw, Loader2,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, PieChart as RechartsPie, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import { cn } from "@/lib/utils";
+import { useQueryHistory, usePromptHistory } from "@/hooks/useQueryStore";
 
 const CHART_COLORS = [
   "hsl(193, 85%, 54%)",
@@ -16,44 +17,6 @@ const CHART_COLORS = [
   "hsl(38, 90%, 55%)",
   "hsl(270, 70%, 65%)",
   "hsl(20, 80%, 60%)",
-];
-
-const ROLE_DATA = [
-  { name: "user",   value: 45, count: 1823 },
-  { name: "admin",  value: 25, count: 1012 },
-  { name: "editor", value: 20, count:  810 },
-  { name: "viewer", value: 10, count:  405 },
-];
-
-const SIGNUP_DATA = [
-  { month: "Jan", signups: 180, active: 140 },
-  { month: "Feb", signups: 220, active: 190 },
-  { month: "Mar", signups: 310, active: 260 },
-  { month: "Apr", signups: 280, active: 235 },
-  { month: "May", signups: 360, active: 310 },
-  { month: "Jun", signups: 420, active: 368 },
-  { month: "Jul", signups: 380, active: 340 },
-  { month: "Aug", signups: 450, active: 400 },
-  { month: "Sep", signups: 520, active: 465 },
-  { month: "Oct", signups: 490, active: 432 },
-  { month: "Nov", signups: 580, active: 520 },
-  { month: "Dec", signups: 640, active: 575 },
-];
-
-const CATEGORY_DATA = [
-  { category: "Electronics", count: 142, avg_price: 299.99 },
-  { category: "Apparel",     count: 210, avg_price:  49.95 },
-  { category: "Books",       count: 380, avg_price:  19.99 },
-  { category: "Home",        count:  95, avg_price: 124.50 },
-  { category: "Sports",      count: 178, avg_price:  79.00 },
-  { category: "Beauty",      count: 230, avg_price:  39.95 },
-];
-
-const ORDER_STATUS_DATA = [
-  { status: "completed", value: 62 },
-  { status: "pending",   value: 18 },
-  { status: "shipped",   value: 14 },
-  { status: "cancelled", value:  6 },
 ];
 
 const CUSTOM_TOOLTIP_STYLE = {
@@ -65,30 +28,85 @@ const CUSTOM_TOOLTIP_STYLE = {
   color: "hsl(210, 20%, 92%)",
 };
 
-type Tab = "overview" | "users" | "products" | "orders";
-
-const STAT_CARDS = [
-  { icon: Users,        label: "Total Users",     value: "4,050",  change: "+12.4%", up: true },
-  { icon: ShoppingCart, label: "Orders (30d)",    value: "1,832",  change: "+8.1%",  up: true },
-  { icon: Package,      label: "Low Stock Items", value: "7",      change: "-2",     up: false },
-  { icon: Zap,          label: "Avg Query Time",  value: "87ms",   change: "-14%",   up: true },
-];
+type Tab = "overview" | "queries" | "ai";
 
 export default function InsightsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const queryHistory = useQueryHistory();
+  const promptHistory = usePromptHistory();
+
+  // ── Derived metrics ──────────────────────────────────────────────────────
+  const stats = useMemo(() => {
+    const total = queryHistory.length;
+    const success = queryHistory.filter((q) => q.status === "success").length;
+    const errors = queryHistory.filter((q) => q.status === "error").length;
+    const avgDuration = total > 0
+      ? Math.round(queryHistory.reduce((s, q) => s + q.durationMs, 0) / total)
+      : 0;
+    const totalTokens = promptHistory.reduce((s, p) => s + p.inputTokens + p.outputTokens, 0);
+    return { total, success, errors, avgDuration, totalTokens };
+  }, [queryHistory, promptHistory]);
+
+  // Queries per DB type
+  const dbTypeDist = useMemo(() => {
+    const map: Record<string, number> = {};
+    queryHistory.forEach((q) => { map[q.dbType] = (map[q.dbType] ?? 0) + 1; });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [queryHistory]);
+
+  // Query duration trend (last 20)
+  const durationTrend = useMemo(() =>
+    queryHistory.slice(0, 20).reverse().map((q, i) => ({
+      i: i + 1,
+      ms: q.durationMs,
+      label: q.table || "query",
+    })),
+    [queryHistory]
+  );
+
+  // Queries by schema.table
+  const tableFreq = useMemo(() => {
+    const map: Record<string, number> = {};
+    queryHistory.forEach((q) => {
+      const key = `${q.schema}.${q.table}`;
+      if (key !== ".") map[key] = (map[key] ?? 0) + 1;
+    });
+    return Object.entries(map)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([name, count]) => ({ name, count }));
+  }, [queryHistory]);
+
+  // AI action breakdown
+  const aiActionDist = useMemo(() => {
+    const map: Record<string, number> = {};
+    promptHistory.forEach((p) => { map[p.action] = (map[p.action] ?? 0) + 1; });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [promptHistory]);
+
+  // Token usage by action
+  const tokenByAction = useMemo(() => {
+    const map: Record<string, number> = {};
+    promptHistory.forEach((p) => {
+      map[p.action] = (map[p.action] ?? 0) + p.inputTokens + p.outputTokens;
+    });
+    return Object.entries(map).map(([name, tokens]) => ({ name, tokens }));
+  }, [promptHistory]);
+
+  const isEmpty = queryHistory.length === 0 && promptHistory.length === 0;
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface flex-shrink-0">
         <BarChart3 size={15} className="text-primary" />
-        <h1 className="text-[13px] font-semibold text-foreground">Insights & Visualization</h1>
-        <span className="ai-badge ai-badge-pink ml-1">AI-Powered</span>
+        <h1 className="text-[13px] font-semibold text-foreground">Insights & Analytics</h1>
+        <span className="ai-badge ai-badge-pink ml-1">Live Data</span>
       </div>
 
       {/* Tabs */}
       <div className="flex items-center gap-0 px-4 border-b border-border bg-background flex-shrink-0">
-        {(["overview", "users", "products", "orders"] as Tab[]).map((t) => (
+        {(["overview", "queries", "ai"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setActiveTab(t)}
@@ -99,195 +117,202 @@ export default function InsightsPage() {
                 : "border-transparent text-muted-foreground hover:text-foreground"
             )}
           >
-            {t}
+            {t === "ai" ? "AI Usage" : t}
           </button>
         ))}
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
-        {/* Stat cards */}
-        <div className="grid grid-cols-4 gap-3">
-          {STAT_CARDS.map(({ icon: Icon, label, value, change, up }) => (
-            <div key={label} className="panel p-3">
-              <div className="flex items-start justify-between">
-                <div>
+        {isEmpty && (
+          <div className="flex flex-col items-center justify-center h-64 text-center gap-3">
+            <div className="w-14 h-14 rounded-sm bg-surface border border-border flex items-center justify-center">
+              <BarChart3 size={24} className="text-muted-foreground/30" />
+            </div>
+            <p className="text-[13px] font-semibold text-foreground">No data yet</p>
+            <p className="text-[11.5px] text-muted-foreground max-w-xs leading-relaxed">
+              Run queries and use AI actions in the workspace to see live analytics here.
+            </p>
+          </div>
+        )}
+
+        {!isEmpty && activeTab === "overview" && (
+          <>
+            {/* Stat cards */}
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                { label: "Total Queries", value: stats.total.toString(), sub: `${stats.success} success · ${stats.errors} errors` },
+                { label: "Avg Duration", value: `${stats.avgDuration}ms`, sub: "per query" },
+                { label: "AI Prompts", value: promptHistory.length.toString(), sub: "total requests" },
+                { label: "Tokens Used", value: stats.totalTokens.toLocaleString(), sub: "total AI tokens" },
+              ].map(({ label, value, sub }) => (
+                <div key={label} className="panel p-3">
                   <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider">{label}</p>
                   <p className="text-[22px] font-semibold text-foreground font-mono mt-1 leading-none">{value}</p>
-                </div>
-                <div className="w-7 h-7 rounded-sm bg-primary-dim flex items-center justify-center">
-                  <Icon size={13} className="text-primary" />
-                </div>
-              </div>
-              <div className={cn("text-[11px] font-mono mt-2", up ? "text-success" : "text-destructive")}>
-                {up ? "▲" : "▼"} {change} vs last period
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Main charts grid */}
-        <div className="grid grid-cols-2 gap-3">
-          {/* Signup trend */}
-          <div className="panel p-4 col-span-2">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
-                  <TrendingUp size={12} className="text-primary" />
-                  User Growth — 2024
-                </p>
-                <p className="text-[10.5px] text-muted-foreground mt-0.5">Signups vs Active Users by month</p>
-              </div>
-              <span className="ai-badge ai-badge-cyan">Line Chart</span>
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={SIGNUP_DATA}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" />
-                <XAxis dataKey="month" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
-                <YAxis tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
-                <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
-                <Legend wrapperStyle={{ fontSize: "11px", fontFamily: "Geist Mono" }} />
-                <Line type="monotone" dataKey="signups" stroke={CHART_COLORS[0]} strokeWidth={2} dot={false} name="Signups" />
-                <Line type="monotone" dataKey="active" stroke={CHART_COLORS[1]} strokeWidth={2} dot={false} name="Active" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Role distribution */}
-          <div className="panel p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
-                  <PieChart size={12} className="text-accent" />
-                  Role Distribution
-                </p>
-                <p className="text-[10.5px] text-muted-foreground mt-0.5">Users by assigned role</p>
-              </div>
-              <span className="ai-badge ai-badge-pink">Pie Chart</span>
-            </div>
-            <ResponsiveContainer width="100%" height={180}>
-              <RechartsPie>
-                <Pie
-                  data={ROLE_DATA}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={80}
-                  dataKey="value"
-                  label={({ name, value }) => `${name} ${value}%`}
-                  labelLine={false}
-                >
-                  {ROLE_DATA.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} formatter={(v) => `${v}%`} />
-              </RechartsPie>
-            </ResponsiveContainer>
-            <div className="mt-2 space-y-1">
-              {ROLE_DATA.map((r, i) => (
-                <div key={r.name} className="flex items-center justify-between text-[11px] font-mono">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-sm" style={{ background: CHART_COLORS[i] }} />
-                    <span className="text-foreground capitalize">{r.name}</span>
-                  </div>
-                  <span className="text-muted-foreground">{r.count.toLocaleString()} users</span>
+                  <p className="text-[10px] font-mono text-muted-foreground mt-1">{sub}</p>
                 </div>
               ))}
             </div>
-          </div>
 
-          {/* Products by category */}
-          <div className="panel p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
-                  <Package size={12} className="text-success" />
-                  Products by Category
-                </p>
-                <p className="text-[10.5px] text-muted-foreground mt-0.5">Count and avg price</p>
-              </div>
-              <span className="ai-badge ai-badge-success">Bar Chart</span>
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={CATEGORY_DATA} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" horizontal={false} />
-                <XAxis type="number" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
-                <YAxis dataKey="category" type="category" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} width={70} />
-                <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
-                <Bar dataKey="count" fill={CHART_COLORS[0]} radius={[0, 2, 2, 0]} name="Count" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Order status */}
-          <div className="panel p-4 col-span-2">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
-                  <Activity size={12} className="text-warning" />
-                  Order Status Breakdown
-                </p>
-                <p className="text-[10.5px] text-muted-foreground mt-0.5">Distribution across all statuses</p>
-              </div>
-              <span className="ai-badge ai-badge-warning">Bar Chart</span>
-            </div>
-            <ResponsiveContainer width="100%" height={120}>
-              <BarChart data={ORDER_STATUS_DATA}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" />
-                <XAxis dataKey="status" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
-                <YAxis tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
-                <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} formatter={(v) => `${v}%`} />
-                <Bar dataKey="value" radius={[2, 2, 0, 0]} name="Share %">
-                  {ORDER_STATUS_DATA.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* AI suggestions */}
-        <div className="panel p-4 border-accent/20">
-          <div className="flex items-center gap-2 mb-3">
-            <Zap size={13} className="text-accent" />
-            <p className="text-[12px] font-semibold text-foreground">AI Chart Recommendations</p>
-            <span className="ai-badge ai-badge-pink ml-1">3 Suggestions</span>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              {
-                title: "Revenue Cohort Analysis",
-                desc: "Group users by signup month, plot avg revenue per cohort over time.",
-                chart: "Heatmap",
-                badge: "ai-badge-pink",
-              },
-              {
-                title: "Order Funnel",
-                desc: "Visualize drop-off rates from signup → first order → repeat purchase.",
-                chart: "Funnel",
-                badge: "ai-badge-cyan",
-              },
-              {
-                title: "Stock Depletion Forecast",
-                desc: "Project when low-stock items will hit zero based on last 30-day sales rate.",
-                chart: "Area",
-                badge: "ai-badge-warning",
-              },
-            ].map(({ title, desc, chart, badge }) => (
-              <div key={title} className="bg-background rounded-sm border border-border p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className={`ai-badge ${badge}`}>{chart}</span>
+            {/* Duration trend */}
+            {durationTrend.length > 1 && (
+              <div className="panel p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
+                      <TrendingUp size={12} className="text-primary" />
+                      Query Duration Trend
+                    </p>
+                    <p className="text-[10.5px] text-muted-foreground mt-0.5">Last {durationTrend.length} queries</p>
+                  </div>
+                  <span className="ai-badge ai-badge-cyan">Line Chart</span>
                 </div>
-                <p className="text-[12px] text-foreground font-medium mb-1">{title}</p>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">{desc}</p>
-                <button className="mt-2 text-[11px] text-primary font-mono hover:underline">
-                  Generate query →
-                </button>
+                <ResponsiveContainer width="100%" height={180}>
+                  <LineChart data={durationTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" />
+                    <XAxis dataKey="i" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
+                    <YAxis tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} unit="ms" />
+                    <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} formatter={(v) => [`${v}ms`, "Duration"]} />
+                    <Line type="monotone" dataKey="ms" stroke={CHART_COLORS[0]} strokeWidth={2} dot={false} name="Duration (ms)" />
+                  </LineChart>
+                </ResponsiveContainer>
               </div>
-            ))}
-          </div>
-        </div>
+            )}
+
+            {/* DB type + table freq */}
+            <div className="grid grid-cols-2 gap-3">
+              {dbTypeDist.length > 0 && (
+                <div className="panel p-4">
+                  <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5 mb-3">
+                    <PieChart size={12} className="text-accent" />
+                    Queries by DB Type
+                  </p>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <RechartsPie>
+                      <Pie data={dbTypeDist} cx="50%" cy="50%" innerRadius={40} outerRadius={70}
+                        dataKey="value" label={({ name, value }) => `${name} (${value})`} labelLine={false}>
+                        {dbTypeDist.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                      </Pie>
+                      <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
+                    </RechartsPie>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {tableFreq.length > 0 && (
+                <div className="panel p-4">
+                  <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5 mb-3">
+                    <Activity size={12} className="text-success" />
+                    Most Queried Tables
+                  </p>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={tableFreq} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" horizontal={false} />
+                      <XAxis type="number" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
+                      <YAxis dataKey="name" type="category" tick={{ fontSize: 9, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} width={90} />
+                      <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
+                      <Bar dataKey="count" fill={CHART_COLORS[0]} radius={[0, 2, 2, 0]} name="Queries" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {!isEmpty && activeTab === "queries" && (
+          <>
+            {/* Error rate */}
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "Success Rate", value: stats.total > 0 ? `${Math.round((stats.success / stats.total) * 100)}%` : "—" },
+                { label: "Error Rate", value: stats.total > 0 ? `${Math.round((stats.errors / stats.total) * 100)}%` : "—" },
+                { label: "Avg Duration", value: `${stats.avgDuration}ms` },
+              ].map(({ label, value }) => (
+                <div key={label} className="panel p-3">
+                  <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider">{label}</p>
+                  <p className="text-[20px] font-semibold text-foreground font-mono mt-1">{value}</p>
+                </div>
+              ))}
+            </div>
+
+            {durationTrend.length > 0 && (
+              <div className="panel p-4">
+                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5 mb-3">
+                  <TrendingUp size={12} className="text-primary" />
+                  Duration per Query (last 20)
+                </p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={durationTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" />
+                    <XAxis dataKey="i" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
+                    <YAxis tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} unit="ms" />
+                    <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} formatter={(v) => [`${v}ms`, "Duration"]} />
+                    <Bar dataKey="ms" radius={[2, 2, 0, 0]} name="Duration (ms)">
+                      {durationTrend.map((d, i) => (
+                        <Cell key={i} fill={d.ms > 500 ? CHART_COLORS[1] : CHART_COLORS[0]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </>
+        )}
+
+        {!isEmpty && activeTab === "ai" && (
+          <>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "Total Prompts", value: promptHistory.length.toString() },
+                { label: "Total Tokens", value: stats.totalTokens.toLocaleString() },
+                { label: "Avg Tokens/Req", value: promptHistory.length > 0 ? Math.round(stats.totalTokens / promptHistory.length).toString() : "—" },
+              ].map(({ label, value }) => (
+                <div key={label} className="panel p-3">
+                  <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider">{label}</p>
+                  <p className="text-[20px] font-semibold text-foreground font-mono mt-1">{value}</p>
+                </div>
+              ))}
+            </div>
+
+            {aiActionDist.length > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="panel p-4">
+                  <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5 mb-3">
+                    <Zap size={12} className="text-accent" />
+                    AI Actions Used
+                  </p>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <RechartsPie>
+                      <Pie data={aiActionDist} cx="50%" cy="50%" innerRadius={40} outerRadius={70}
+                        dataKey="value" label={({ name, value }) => `${name} (${value})`} labelLine={false}>
+                        {aiActionDist.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                      </Pie>
+                      <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
+                    </RechartsPie>
+                  </ResponsiveContainer>
+                </div>
+
+                {tokenByAction.length > 0 && (
+                  <div className="panel p-4">
+                    <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5 mb-3">
+                      <BarChart3 size={12} className="text-primary" />
+                      Token Usage by Action
+                    </p>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <BarChart data={tokenByAction}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 15%, 16%)" />
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
+                        <YAxis tick={{ fontSize: 10, fontFamily: "Geist Mono", fill: "hsl(210, 10%, 45%)" }} />
+                        <Tooltip contentStyle={CUSTOM_TOOLTIP_STYLE} />
+                        <Bar dataKey="tokens" fill={CHART_COLORS[0]} radius={[2, 2, 0, 0]} name="Tokens" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
