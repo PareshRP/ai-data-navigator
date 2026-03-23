@@ -43,6 +43,39 @@ async function authHeaders(): Promise<Record<string, string>> {
   };
 }
 
+export async function callAIAssistant(payload: {
+  action: "generate" | "explain" | "optimize" | "debug" | "analyze";
+  query?: string;
+  prompt?: string;
+  schema?: SchemaTree;
+  dbType?: "postgresql" | "mongodb";
+  results?: Record<string, unknown>[];
+  error?: string;
+  model?: string;
+}): Promise<{ content: string; inputTokens: number; outputTokens: number; durationMs: number }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${FUNCTIONS_URL}/ai-assistant`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? "AI request failed");
+  return json;
+}
+
+export async function testConnectionReal(connectionId: string): Promise<{ success: boolean; status: "connected" | "error"; error?: string; latencyMs?: number }> {
+  const headers = await authHeaders();
+  const res = await fetch(`${FUNCTIONS_URL}/test-connection`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ connection_id: connectionId }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error ?? "Test failed");
+  return json;
+}
+
 export function useConnections() {
   const { user } = useAuth();
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -93,18 +126,16 @@ export function useConnections() {
     setConnections((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
+  /** Real TCP test via test-connection edge function */
   const testConnection = useCallback(async (id: string): Promise<"connected" | "error"> => {
-    const headers = await authHeaders();
-    const res = await fetch(`${FUNCTIONS_URL}/manage-connections`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({ connection_id: id, action: "test" }),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error ?? "Test failed");
-    const status = json.status as "connected" | "error";
+    const result = await testConnectionReal(id);
+    const status = result.status;
     setConnections((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, status } : c))
+      prev.map((c) =>
+        c.id === id
+          ? { ...c, status, error_message: result.error ?? undefined, last_tested_at: new Date().toISOString() }
+          : c
+      )
     );
     return status;
   }, []);
