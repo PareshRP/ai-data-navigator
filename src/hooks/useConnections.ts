@@ -133,7 +133,7 @@ export function useConnections() {
     setConnections((prev) =>
       prev.map((c) =>
         c.id === id
-          ? { ...c, status, error_message: result.error ?? null ?? undefined, last_tested_at: new Date().toISOString() }
+          ? { ...c, status, error_message: result.error ?? undefined, last_tested_at: new Date().toISOString() }
           : c
       )
     );
