@@ -5,6 +5,11 @@
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
 
 <img width="1914" height="855" alt="image" src="https://github.com/user-attachments/assets/22317de9-7070-4978-b42f-93a5320e8c5f" />
+<img width="1919" height="708" alt="image" src="https://github.com/user-attachments/assets/a3077852-dbdd-477b-8436-5f513b3b272d" />
+<img width="1914" height="715" alt="image" src="https://github.com/user-attachments/assets/a765b770-bbf6-496d-9ed9-191086624647" />
+<img width="555" height="583" alt="image" src="https://github.com/user-attachments/assets/a3f175d7-65f0-4198-b45e-9e9961b3645a" />
+<img width="1366" height="748" alt="image" src="https://github.com/user-attachments/assets/e7d9f11a-17d0-4d37-ab7b-213d6ee913be" />
+<img width="1343" height="848" alt="image" src="https://github.com/user-attachments/assets/b065197f-76f4-4211-b26a-2fd09403bef8" />
 
 
 ## How can I edit this code?
