@@ -101,6 +101,7 @@ export default function SettingsPage() {
               { id: "connections" as Tab, icon: Database, label: "Connections" },
               { id: "ai"          as Tab, icon: Cpu,      label: "AI Model" },
               { id: "security"    as Tab, icon: Shield,   label: "Security" },
+              ...(isAdmin ? [{ id: "permissions" as Tab, icon: UserCog, label: "Permissions" }] : []),
               { id: "usage"       as Tab, icon: Activity, label: "API Usage" },
             ] as const
           ).map(({ id, icon: Icon, label }) => (
