@@ -4,6 +4,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { PermissionsProvider } from "@/hooks/usePermissions";
 import AppLayout from "@/components/AppLayout";
 import QueryWorkspace from "@/pages/QueryWorkspace";
 import QueryHistoryPage from "@/pages/QueryHistoryPage";
@@ -32,16 +33,18 @@ function ProtectedRoutes() {
   if (!user) return <Navigate to="/login" replace />;
 
   return (
-    <Routes>
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<QueryWorkspace />} />
-        <Route path="/history" element={<QueryHistoryPage />} />
-        <Route path="/prompts" element={<PromptHistoryPage />} />
-        <Route path="/insights" element={<InsightsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-      </Route>
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+    <PermissionsProvider>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route path="/" element={<QueryWorkspace />} />
+          <Route path="/history" element={<QueryHistoryPage />} />
+          <Route path="/prompts" element={<PromptHistoryPage />} />
+          <Route path="/insights" element={<InsightsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </PermissionsProvider>
   );
 }
 
