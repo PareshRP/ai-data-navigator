@@ -795,6 +795,19 @@ export default function QueryWorkspace() {
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
                 {activeConn?.type === "mongodb" ? "Query Editor" : "SQL Editor"}
               </span>
+              <span
+                className={cn(
+                  "ai-badge ml-2",
+                  hasWriteFor(selectedConnId) ? "ai-badge-pink" : "ai-badge-cyan"
+                )}
+                title={
+                  hasWriteFor(selectedConnId)
+                    ? `WRITE access granted (${writeGrants.length} active grant${writeGrants.length === 1 ? "" : "s"})`
+                    : "Read-only access. Request WRITE permission in Settings → Security."
+                }
+              >
+                {hasWriteFor(selectedConnId) ? "WRITE" : "READ-ONLY"}
+              </span>
               <div className="ml-auto flex items-center gap-1">
                 <button onClick={copyQuery} className="p-1.5 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-snap" title="Copy query">
                   <Copy size={11} />
