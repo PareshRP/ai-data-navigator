@@ -2,14 +2,16 @@ import { useState } from "react";
 import {
   Settings, Database, Cpu, Shield, Activity,
   Plus, Trash2, Check, AlertCircle,
-  ChevronRight, Zap, Globe, Loader2, RefreshCw,
+  ChevronRight, Zap, Globe, Loader2, RefreshCw, UserCog, ShieldCheck, Clock, Infinity as InfinityIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConnections } from "@/hooks/useConnections";
 import AddConnectionDialog from "@/components/AddConnectionDialog";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/usePermissions";
+import AdminPermissionsPanel from "@/components/AdminPermissionsPanel";
 
-type Tab = "connections" | "ai" | "security" | "usage";
+type Tab = "connections" | "ai" | "security" | "usage" | "permissions";
 
 const AI_MODELS = [
   { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash (Default)", speed: "Fast", quality: "High" },
@@ -41,6 +43,7 @@ export default function SettingsPage() {
 
   const { connections, loading, error, addConnection, deleteConnection, testConnection } = useConnections();
   const { toast } = useToast();
+  const { isAdmin, writeGrants } = usePermissions();
 
   const handleDelete = async (id: string) => {
     try {
@@ -93,14 +96,13 @@ export default function SettingsPage() {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Settings sidebar */}
         <div className="w-[180px] flex-shrink-0 border-r border-border bg-sidebar py-2">
-          {(
-            [
+          {([
               { id: "connections" as Tab, icon: Database, label: "Connections" },
               { id: "ai"          as Tab, icon: Cpu,      label: "AI Model" },
               { id: "security"    as Tab, icon: Shield,   label: "Security" },
+              ...(isAdmin ? [{ id: "permissions" as Tab, icon: UserCog, label: "Permissions" }] : []),
               { id: "usage"       as Tab, icon: Activity, label: "API Usage" },
-            ] as const
-          ).map(({ id, icon: Icon, label }) => (
+          ] as { id: Tab; icon: typeof Database; label: string }[]).map(({ id, icon: Icon, label }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
@@ -320,18 +322,62 @@ export default function SettingsPage() {
                 <p className="text-[11.5px] text-muted-foreground mt-0.5">All queries are validated before execution. Write operations are blocked.</p>
               </div>
 
+              {/* My Access — visible to every user */}
+              <div className="panel p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={13} className={writeGrants.length > 0 ? "text-success" : "text-muted-foreground"} />
+                  <p className="text-[12px] font-semibold text-foreground">My Write Access</p>
+                  <span className={cn(
+                    "ai-badge ml-auto",
+                    writeGrants.length > 0 ? "ai-badge-success" : "ai-badge-cyan"
+                  )}>
+                    {writeGrants.length > 0 ? "Write Enabled" : "Read-Only"}
+                  </span>
+                </div>
+                {writeGrants.length === 0 ? (
+                  <p className="text-[11.5px] text-muted-foreground">
+                    You currently have read-only access. Ask an administrator to grant write permission for INSERT, UPDATE, or DELETE operations.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {writeGrants.map((g) => {
+                      const expiresMs = g.expires_at ? new Date(g.expires_at).getTime() - Date.now() : null;
+                      const expiresText = !g.expires_at
+                        ? "Permanent"
+                        : expiresMs! < 3600000
+                          ? `${Math.max(0, Math.round(expiresMs! / 60000))}m left`
+                          : expiresMs! < 86400000
+                            ? `${Math.round(expiresMs! / 3600000)}h left`
+                            : `${Math.round(expiresMs! / 86400000)}d left`;
+                      return (
+                        <div key={g.id} className="flex items-center gap-2 bg-background border border-border rounded-sm px-2.5 py-1.5">
+                          {g.expires_at ? <Clock size={11} className="text-success" /> : <InfinityIcon size={11} className="text-primary" />}
+                          <span className="text-[11.5px] font-mono text-foreground">
+                            {g.connection_id ? `Conn ${g.connection_id.slice(0, 8)}` : "All connections"}
+                          </span>
+                          <span className="ai-badge ai-badge-success">{expiresText}</span>
+                          {g.reason && (
+                            <span className="text-[11px] text-muted-foreground italic truncate">"{g.reason}"</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="panel p-4 space-y-3">
                 <div className="flex items-center gap-2">
                   <Shield size={13} className="text-success" />
-                  <p className="text-[12px] font-semibold text-foreground">Read-Only Enforcement</p>
+                  <p className="text-[12px] font-semibold text-foreground">Write Operation Guardrail</p>
                   <span className="ai-badge ai-badge-success ml-auto">Active</span>
                 </div>
                 <p className="text-[11.5px] text-muted-foreground">
-                  The query validator blocks all write operations before they reach the database.
-                  AI-generated queries are also validated.
+                  Write operations (INSERT, UPDATE, DELETE, etc.) are blocked unless an administrator
+                  has granted you a temporary or permanent write permission. AI-generated queries follow the same rules.
                 </p>
                 <div className="bg-background rounded-sm border border-border p-3">
-                  <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider mb-2">Blocked Keywords</p>
+                  <p className="text-[10.5px] text-muted-foreground uppercase tracking-wider mb-2">Restricted Keywords (require write permission)</p>
                   <div className="flex flex-wrap gap-1.5">
                     {BLOCKED_KEYWORDS.map((kw) => (
                       <span key={kw} className="px-2 py-0.5 rounded-sm bg-destructive/10 text-destructive text-[11px] font-mono border border-destructive/20">
@@ -396,6 +442,14 @@ export default function SettingsPage() {
                   <span className="text-[11px] font-mono text-muted-foreground">Audit logging enabled · 7,482 events (30d)</span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ── Permissions (admin only) ── */}
+          {activeTab === "permissions" && isAdmin && <AdminPermissionsPanel />}
+          {activeTab === "permissions" && !isAdmin && (
+            <div className="panel p-6 max-w-md">
+              <p className="text-[12px] text-muted-foreground">Admin access required.</p>
             </div>
           )}
 

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useConnections, callAIAssistant, SchemaTree } from "@/hooks/useConnections";
 import { addQueryRecord, addPromptRecord } from "@/hooks/useQueryStore";
+import { usePermissions } from "@/hooks/usePermissions";
 import { useNavigate } from "react-router-dom";
 
 // ─── Types ──────────────────────────────────────────────────────────────
@@ -331,6 +332,7 @@ export default function QueryWorkspace() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { connections, loading: connLoading, fetchSchema } = useConnections();
+  const { hasWriteFor, writeGrants } = usePermissions();
 
   // Selected connection
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
@@ -432,13 +434,19 @@ export default function QueryWorkspace() {
   const { height: editorHeight, onMouseDown: onDragStart } = useResizablePanel(280, 140, 560);
 
   // ── Validation ──────────────────────────────────────────────────────────
-  const BLOCKED = /\b(DELETE|UPDATE|INSERT|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE)\b/gi;
+  const WRITE_KEYWORDS = /\b(DELETE|UPDATE|INSERT|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE)\b/gi;
   const validateQuery = useCallback((q: string) => {
-    const match = q.match(BLOCKED);
-    if (match) return `Write operation blocked: ${[...new Set(match)].join(", ")}`;
     if (!q.trim()) return "Query is empty";
+    const match = q.match(WRITE_KEYWORDS);
+    if (match) {
+      const allowed = hasWriteFor(selectedConnId);
+      if (!allowed) {
+        const kws = [...new Set(match.map((s) => s.toUpperCase()))].join(", ");
+        return `Write operation blocked (${kws}). You have read-only access — request WRITE permission from an administrator in Settings → Security.`;
+      }
+    }
     return null;
-  }, []);
+  }, [hasWriteFor, selectedConnId]);
 
   // ── Run Query ───────────────────────────────────────────────────────────
   // Note: Real execution requires a backend PostgreSQL/MongoDB driver.
@@ -786,6 +794,19 @@ export default function QueryWorkspace() {
             <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border bg-surface flex-shrink-0">
               <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
                 {activeConn?.type === "mongodb" ? "Query Editor" : "SQL Editor"}
+              </span>
+              <span
+                className={cn(
+                  "ai-badge ml-2",
+                  hasWriteFor(selectedConnId) ? "ai-badge-pink" : "ai-badge-cyan"
+                )}
+                title={
+                  hasWriteFor(selectedConnId)
+                    ? `WRITE access granted (${writeGrants.length} active grant${writeGrants.length === 1 ? "" : "s"})`
+                    : "Read-only access. Request WRITE permission in Settings → Security."
+                }
+              >
+                {hasWriteFor(selectedConnId) ? "WRITE" : "READ-ONLY"}
               </span>
               <div className="ml-auto flex items-center gap-1">
                 <button onClick={copyQuery} className="p-1.5 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-snap" title="Copy query">
