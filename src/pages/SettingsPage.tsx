@@ -96,15 +96,13 @@ export default function SettingsPage() {
       <div className="flex-1 flex min-h-0 overflow-hidden">
         {/* Settings sidebar */}
         <div className="w-[180px] flex-shrink-0 border-r border-border bg-sidebar py-2">
-          {(
-            [
+          {([
               { id: "connections" as Tab, icon: Database, label: "Connections" },
               { id: "ai"          as Tab, icon: Cpu,      label: "AI Model" },
               { id: "security"    as Tab, icon: Shield,   label: "Security" },
               ...(isAdmin ? [{ id: "permissions" as Tab, icon: UserCog, label: "Permissions" }] : []),
               { id: "usage"       as Tab, icon: Activity, label: "API Usage" },
-            ] as const
-          ).map(({ id, icon: Icon, label }) => (
+          ] as { id: Tab; icon: typeof Database; label: string }[]).map(({ id, icon: Icon, label }) => (
             <button
               key={id}
               onClick={() => setActiveTab(id)}
