@@ -2,14 +2,16 @@ import { useState } from "react";
 import {
   Settings, Database, Cpu, Shield, Activity,
   Plus, Trash2, Check, AlertCircle,
-  ChevronRight, Zap, Globe, Loader2, RefreshCw,
+  ChevronRight, Zap, Globe, Loader2, RefreshCw, UserCog, ShieldCheck, Clock, Infinity as InfinityIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConnections } from "@/hooks/useConnections";
 import AddConnectionDialog from "@/components/AddConnectionDialog";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/usePermissions";
+import AdminPermissionsPanel from "@/components/AdminPermissionsPanel";
 
-type Tab = "connections" | "ai" | "security" | "usage";
+type Tab = "connections" | "ai" | "security" | "usage" | "permissions";
 
 const AI_MODELS = [
   { id: "google/gemini-3-flash-preview", label: "Gemini 3 Flash (Default)", speed: "Fast", quality: "High" },
@@ -41,6 +43,7 @@ export default function SettingsPage() {
 
   const { connections, loading, error, addConnection, deleteConnection, testConnection } = useConnections();
   const { toast } = useToast();
+  const { isAdmin, writeGrants } = usePermissions();
 
   const handleDelete = async (id: string) => {
     try {
